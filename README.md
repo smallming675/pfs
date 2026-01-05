@@ -8,8 +8,8 @@ This is a tool that provides a simple interface for interacting with the file sy
 
 ### Usage
 ```bash
-./fs_tool -d disk.img init
-./fs_tool -d disk.img write local_file system_file
+./fs_tool -d disk.img -s -b 1000 init
+./fs_tool -d disk.img write test_files/pex pex
 ./fs_tool -d disk.img read system_file
 ```
 

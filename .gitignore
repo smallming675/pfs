@@ -1,5 +1,4 @@
 a.out
-pex
+test_files/*
 disk.img
-test.sh
-pie
+obj
