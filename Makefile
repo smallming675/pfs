@@ -1,37 +1,34 @@
 CC := gcc
-CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -pedantic
-LDFLAGS := 
+CFLAGS := -O2 -Wall -Wextra -Werror -pedantic -g
+LDFLAGS :=
 INCLUDES := -Iinclude
 
-SRC := src/fs.c src/logger.c src/main.c
+SRC := src/fs.c src/logger.c src/main.c src/dir.c
 OBJ := $(SRC:src/%.c=build/%.o)
 
-BIN := fs_tool
+BIN_DIR := bin
+BUILD_DIR := build
+BIN := $(BIN_DIR)/fs_tool
+TEST_BIN := $(BIN_DIR)/tests_runner
 
-.PHONY: all clean run test
+.PHONY: all clean run test dirs
 
-all: $(BIN)
+all: dirs $(BIN)
+
+dirs:
+	@mkdir -p $(BUILD_DIR) $(BIN_DIR)
 
 $(BIN): $(OBJ)
-	$(CC) $(CFLAGS) $(OBJ) -o $(BIN)
+	$(CC) $(CFLAGS) $(OBJ) -o $@
 
-build/%.o: src/%.c include/fs.h include/logger.h
-	@mkdir -p build
+$(BUILD_DIR)/%.o: src/%.c include/fs.h include/logger.h include/dir.h | dirs
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-src/%.o: src/%.c include/fs.h include/logger.h
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+test: dirs $(TEST_BIN)
+	./$(TEST_BIN)
+
+$(TEST_BIN): $(BUILD_DIR)/tests.o $(BUILD_DIR)/fs.o $(BUILD_DIR)/logger.o $(BUILD_DIR)/dir.o
+	$(CC) $(CFLAGS) $(INCLUDES) $^ -o $@
 
 clean:
-	rm -f $(OBJ) $(BIN)
-	rm -rf tests/tmp
-
-run: $(BIN)
-	./$(BIN) -d tests/tmp.img -b 64 init
-	./$(BIN) -d tests/tmp.img write tests/sample.txt hello
-	./$(BIN) -d tests/tmp.img read hello
-	./$(BIN) -d tests/tmp.img delete hello
-	./$(BIN) -d tests/tmp.img exam
-
-test: clean all
-	bash tests/run.sh
+	rm -rf $(BUILD_DIR) $(BIN_DIR)

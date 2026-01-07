@@ -1,3 +1,5 @@
 fs_tool
 tests/
 build/
+bin/
+fs.img

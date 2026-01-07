@@ -1,0 +1,42 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-std=c11",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-pedantic",
+      "-g",
+      "-Iinclude",
+      "-c",
+      "-o",
+      "build/fs.o",
+      "src/fs.c"
+    ],
+    "directory": "/home/user/projects/pfs",
+    "file": "/home/user/projects/pfs/src/fs.c",
+    "output": "/home/user/projects/pfs/build/fs.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-std=c11",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-pedantic",
+      "-g",
+      "-Iinclude",
+      "-c",
+      "-o",
+      "build/main.o",
+      "src/main.c"
+    ],
+    "directory": "/home/user/projects/pfs",
+    "file": "/home/user/projects/pfs/src/main.c",
+    "output": "/home/user/projects/pfs/build/main.o"
+  }
+]
