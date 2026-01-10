@@ -1,15 +1,44 @@
-This is a tool that provides a simple interface for interacting with the file system. Basic operations include:
+# PFS
 
-### Commands
-- `init`: Create a new file system
-- `write`: Add a file to the system
-- `read`: Retrieve a file's contents
-- `delete`: Remove a file
+This project is a custom file system written in C. It provides a command-line tool (`fs_tool`) for direct interaction with the file system image, and a FUSE (Filesystem in Userspace) implementation (`pfs`) that allows the file system to be mounted and accessed like a regular directory.
 
-### Usage
+## Building the project
+
+To build the project, run the following command:
+
 ```bash
-./fs_tool -d disk.img -s -b 1000 init
-./fs_tool -d disk.img write test_files/pex pex
-./fs_tool -d disk.img read system_file
+make
+```
+
+This will create two executables in the `bin` directory: `fs_tool` and `pfs`.
+
+## Running `fs_tool`
+
+The `fs_tool` can be used to interact with the file system image. It provides an interactive shell.
+
+```bash
+./bin/fs_tool
+```
+
+The tool will create and use a `disk.img` file in the project's root directory.
+
+## Running the FUSE File System
+
+To mount the file system using FUSE, you need a mount point. Create one if it doesn't exist:
+
+```bash
+mkdir /tmp/pfs
+```
+
+Then, run the `pfs` executable:
+
+```bash
+./bin/pfs -d /tmp/pfs
+```
+
+The `-d` flag enables FUSE's debug output, which is helpful for troubleshooting. The file system will be mounted at `/tmp/pfs`. To unmount it, use `fusermount`:
+
+```bash
+fusermount -u /tmp/pfs
 ```
 

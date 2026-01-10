@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/stat.h> // Include for struct stat
 
 #define FILE_NAME_SIZE 64
 #define ROOT 0
@@ -49,6 +50,7 @@ typedef union {
 typedef struct {
   node_status status;
   node_data data;
+  struct stat st; // Metadata for the file system node
 } fs_node;
 
 typedef struct {
@@ -94,4 +96,7 @@ int fs_read_image(fs *fs, const char *filename);
 const fs_info *fs_meta(const fs *fs);
 const fs_node *fs_table(const fs *fs);
 size_t fs_table_size(const fs *fs);
+uint32_t get_node_from_path(const fs *fs, const char *path);
+
+extern fs my_fs;
 #endif

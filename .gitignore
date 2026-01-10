@@ -1,5 +1,10 @@
-fs_tool
-tests/
-build/
+# Binaries and object files
 bin/
-fs.img
+build/
+
+# IDE and editor specific files
+.cache/
+compile_commands.json
+
+# Image files
+*.img
