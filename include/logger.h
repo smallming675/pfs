@@ -3,7 +3,12 @@
 
 #include <stdio.h>
 
-typedef enum { LOG_INFO, LOG_WARN, LOG_ERROR, LOG_DEBUG } LogLevel;
+typedef enum {
+  LOG_DEBUG = 0,
+  LOG_INFO = 1,
+  LOG_WARN = 2,
+  LOG_ERROR = 3,
+} LogLevel;
 
 extern LogLevel g_log_level;
 

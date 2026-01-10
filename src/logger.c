@@ -19,26 +19,24 @@ static const char *lvl_str(LogLevel lvl) {
   return "";
 }
 
-void set_log_level(LogLevel level) {
-    g_log_level = level;
-}
+void set_log_level(LogLevel level) { g_log_level = level; }
 
 LogLevel log_level_from_str(const char *level_str) {
-    if (strcmp(level_str, "INFO") == 0) {
-        return LOG_INFO;
-    } else if (strcmp(level_str, "WARN") == 0) {
-        return LOG_WARN;
-    } else if (strcmp(level_str, "ERROR") == 0) {
-        return LOG_ERROR;
-    } else if (strcmp(level_str, "DEBUG") == 0) {
-        return LOG_DEBUG;
-    }
+  if (strcmp(level_str, "DEBUG") == 0) {
+    return LOG_DEBUG;
+  } else if (strcmp(level_str, "INFO") == 0) {
+    return LOG_INFO;
+  } else if (strcmp(level_str, "WARN") == 0) {
+    return LOG_WARN;
+  } else if (strcmp(level_str, "ERROR") == 0) {
+    return LOG_ERROR;
+  } else
     return LOG_INFO; // Default to INFO
 }
 
 void log_msg(LogLevel level, const char *fmt, ...) {
-  if (level > g_log_level) {
-      return;
+  if (level < g_log_level) {
+    return;
   }
   time_t t = time(NULL);
   struct tm tm = *localtime(&t);

@@ -321,8 +321,8 @@ uint32_t find_dir_node(const fs *fs, const char *dir_name,
     return NULL_NODE_ID;
   int count = fs->table[dir_node_id].data.dir_entry.entry_count;
   for (int i = 0; i < count; i++) {
-    int id = fs->table[dir_node_id].data.dir_entry.entries[i];
-    if (id && strcmp(fs->table[id].data.dir_entry.dir_name, dir_name) == 0) {
+    uint32_t id = fs->table[dir_node_id].data.dir_entry.entries[i];
+    if (id != NULL_NODE_ID && strcmp(fs->table[id].data.dir_entry.dir_name, dir_name) == 0) {
       log_msg(LOG_DEBUG, "find_dir_node: Found node id %i in directory %i.", id, dir_node_id);
       return id;
     };
@@ -338,8 +338,8 @@ uint32_t find_file_node(const fs *fs, const char *name, uint32_t dir_node_id) {
 
   int count = fs->table[dir_node_id].data.dir_entry.entry_count;
   for (int i = 0; i < count; i++) {
-    int id = fs->table[dir_node_id].data.dir_entry.entries[i];
-    if (id && strcmp(fs->table[id].data.header_file.file_name, name) == 0) {
+    uint32_t id = fs->table[dir_node_id].data.dir_entry.entries[i];
+    if (id != NULL_NODE_ID && strcmp(fs->table[id].data.header_file.file_name, name) == 0) {
       log_msg(LOG_INFO, "find_file_node: Found id %i of '%s' at directory id %i.", id, name,
               dir_node_id);
       return id;
@@ -691,14 +691,12 @@ uint32_t get_node_from_path(const fs *fs, const char *path) {
     if (strcmp(fp.parts[i], "") == 0) {
       continue;
     }
-    bool found_next_node = false;
-    // Check if the current node is a directory
-    if (fs->table[current_node_id].status != NODE_DIR_ENTRY) {
-      log_msg(LOG_WARN, "get_node_from_path: Path component '%s' is not a directory.", fp.parts[i]);
-      file_path_free(&fp);
-      return NULL_NODE_ID;
-    }
-
+            if (fs->table[current_node_id].status != NODE_DIR_ENTRY) {
+              log_msg(LOG_WARN, "get_node_from_path: Path component '%s' is not a directory.", fp.parts[i]);
+              file_path_free(&fp);
+              return NULL_NODE_ID;
+            }
+            bool found_next_node = false;
     // Iterate through directory entries to find the next path component
     uint32_t entry_count = fs->table[current_node_id].data.dir_entry.entry_count;
     for (uint32_t j = 0; j < entry_count; ++j) {

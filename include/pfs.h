@@ -13,5 +13,10 @@ int pfs_write(const char *path, const char *buf, size_t size,
                      off_t offset, struct fuse_file_info *fi);
 int pfs_mknod(const char *path, mode_t mode, dev_t rdev);
 int pfs_unlink(const char *path);
+int pfs_utimens(const char *path, const struct timespec tv[2]);
+int pfs_create(const char *path, mode_t mode, struct fuse_file_info *fi);
+int pfs_open(const char *path, struct fuse_file_info *fi);
+int pfs_fallocate(const char *path, int mode, off_t offset, off_t length, struct fuse_file_info *fi);
+int pfs_flush(const char *path, struct fuse_file_info *fi);
 
 #endif // PFS_H

@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h> // Required for time(NULL)
+#include <unistd.h> // Required for getuid(), getgid()
 
 /* ---------- Path Utilities ---------- */
 
@@ -109,7 +111,7 @@ bool has_name_conflict(const fs *fs, uint32_t dir_node_id, const char *name) {
   uint32_t count = fs->table[dir_node_id].data.dir_entry.entry_count;
   for (uint32_t i = 0; i < count; i++) {
     uint32_t id = fs->table[dir_node_id].data.dir_entry.entries[i];
-    if (!id)
+    if (id == NULL_NODE_ID)
       continue;
 
     if (fs->table[id].status == NODE_DIR_ENTRY &&
@@ -212,7 +214,12 @@ int remove_file_from_dir(fs *fs, uint32_t dir_node_id, uint32_t file_node_id) {
   uint32_t count = fs->table[dir_node_id].data.dir_entry.entry_count;
   for (uint32_t i = 0; i < count; i++) {
     if (fs->table[dir_node_id].data.dir_entry.entries[i] == file_node_id) {
-      fs->table[dir_node_id].data.dir_entry.entries[i] = 0;
+      fs->table[dir_node_id].data.dir_entry.entries[i] = NULL_NODE_ID;
+      // Shift remaining entries to fill the gap
+      for (uint32_t j = i; j < count - 1; ++j) {
+        fs->table[dir_node_id].data.dir_entry.entries[j] = fs->table[dir_node_id].data.dir_entry.entries[j + 1];
+      }
+      fs->table[dir_node_id].data.dir_entry.entries[count - 1] = NULL_NODE_ID; // Clear the last entry
       fs->table[dir_node_id].data.dir_entry.entry_count--;
       log_msg(LOG_INFO, "remove_file_from_dir: Node %u removed from directory %u.", file_node_id,
               dir_node_id);
@@ -235,7 +242,7 @@ int create_dir(fs *fs, uint32_t parent_id, const char *name) {
   uint32_t count = fs->table[parent_id].data.dir_entry.entry_count;
   for (uint32_t i = 0; i < count; i++) {
     uint32_t id = fs->table[parent_id].data.dir_entry.entries[i];
-    if (!id)
+    if (id == NULL_NODE_ID)
       continue;
     if (fs->table[id].status == NODE_DIR_ENTRY &&
         strcmp(fs->table[id].data.dir_entry.dir_name, name) == 0) {
@@ -263,13 +270,56 @@ int create_dir(fs *fs, uint32_t parent_id, const char *name) {
   fs->table[node_id].data.dir_entry.entry_count = 0;
   strncpy(fs->table[node_id].data.dir_entry.dir_name, name, FILE_NAME_SIZE - 1);
 
+  // Initialize stat for the new directory
+  fs->table[node_id].st.st_mode = S_IFDIR | 0755; // Directory with rwx-rx-rx permissions
+  fs->table[node_id].st.st_nlink = 2; // For '.' and '..'
+  fs->table[node_id].st.st_uid = getuid();
+  fs->table[node_id].st.st_gid = getgid();
+  fs->table[node_id].st.st_atime = time(NULL);
+  fs->table[node_id].st.st_mtime = time(NULL);
+  fs->table[node_id].st.st_ctime = time(NULL);
+  fs->table[node_id].st.st_size = 0;
+
   fs->table[parent_id].data.dir_entry.entries[count] = node_id;
   fs->table[parent_id].data.dir_entry.entry_count++;
+  fs->table[parent_id].st.st_nlink++; // Increment parent directory's link count
   log_msg(LOG_INFO, "create_dir: Directory '%s' created as node %u under parent %u.", name,
           node_id, parent_id);
   log_msg(LOG_DEBUG, "create_dir: Parent %u now has %u entries.", parent_id,
           fs->table[parent_id].data.dir_entry.entry_count);
   return node_id;
+}
+
+int delete_directory(fs *fs, const char *name, uint32_t parent_dir_node_id) {
+    log_msg(LOG_INFO, "delete_directory: Deleting directory '%s' from parent %u.", name, parent_dir_node_id);
+
+    uint32_t dir_to_delete_id = find_dir_node(fs, name, parent_dir_node_id);
+    if (dir_to_delete_id == NULL_NODE_ID) {
+        log_msg(LOG_ERROR, "delete_directory: Directory '%s' not found under parent %u.", name, parent_dir_node_id);
+        return 0; // Failure
+    }
+
+    if (fs->table[dir_to_delete_id].data.dir_entry.entry_count > 0) {
+        log_msg(LOG_ERROR, "delete_directory: Directory '%s' is not empty.", name);
+        return 0; // Failure
+    }
+
+    // Remove entry from parent directory
+    if (remove_file_from_dir(fs, parent_dir_node_id, dir_to_delete_id) == 0) {
+        log_msg(LOG_ERROR, "delete_directory: Failed to remove directory entry from parent.");
+        return 0; // Failure
+    }
+
+    // Deallocate the directory node
+    fs_deallocate_node(fs, dir_to_delete_id);
+    memset(&fs->table[dir_to_delete_id], 0, sizeof(fs_node)); // Explicitly clear the node
+    log_msg(LOG_INFO, "delete_directory: Deallocated node %u for directory '%s'.", dir_to_delete_id, name);
+
+    // Decrement parent directory's link count
+    fs->table[parent_dir_node_id].st.st_nlink--;
+
+    log_msg(LOG_INFO, "delete_directory: Successfully deleted directory '%s'.", name);
+    return 1; // Success
 }
 
 /* ---------- Path-based Wrappers ---------- */
@@ -321,7 +371,29 @@ int delete_from_path(fs *fs, const char *path) {
     free_resolved_path(&rp);
     return 0;
   }
-  int ok = delete_file(fs, rp.filename, rp.dir_id);
+
+  uint32_t target_node_id = find_file_node(fs, rp.filename, rp.dir_id); // Try finding as a file first
+  bool is_dir = false;
+  if (target_node_id == NULL_NODE_ID) { // If not a file, try finding as a directory
+      target_node_id = find_dir_node(fs, rp.filename, rp.dir_id);
+      if (target_node_id != NULL_NODE_ID) {
+          is_dir = true;
+      }
+  }
+
+  if (target_node_id == NULL_NODE_ID) {
+    log_msg(LOG_ERROR, "delete_from_path: Node '%s' not found under parent %u.", rp.filename, rp.dir_id);
+    free_resolved_path(&rp);
+    return 0;
+  }
+
+  int ok;
+  if (is_dir) {
+      ok = delete_directory(fs, rp.filename, rp.dir_id);
+  } else {
+      ok = delete_file(fs, rp.filename, rp.dir_id);
+  }
+  
   log_msg(ok ? LOG_INFO : LOG_ERROR, "delete_from_path: Delete %s for '%s'.",
           ok ? "succeeded" : "failed", path);
   free_resolved_path(&rp);

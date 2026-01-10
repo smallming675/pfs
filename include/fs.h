@@ -25,7 +25,7 @@ typedef enum {
 
 typedef struct {
   char dir_name[FILE_NAME_SIZE];
-  uint32_t entry_count;
+  uint32_t entry_count; // Moved back to dir_entry
   uint32_t entries[DIR_ENTRIES_COUNT];
 } dir_entry;
 
@@ -50,7 +50,7 @@ typedef union {
 typedef struct {
   node_status status;
   node_data data;
-  struct stat st; // Metadata for the file system node
+  struct stat st; 
 } fs_node;
 
 typedef struct {

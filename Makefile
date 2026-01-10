@@ -32,11 +32,12 @@ $(BIN_PFS): $(OBJ_PFS)
 $(BUILD_DIR)/%.o: src/%.c include/fs.h include/logger.h include/dir.h include/pfs.h | dirs
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
+
 test: dirs $(TEST_BIN) $(PFS_TEST_BIN)
 	./$(TEST_BIN)
 	./$(PFS_TEST_BIN)
 
-$(TEST_BIN): $(BUILD_DIR)/tests.o $(BUILD_DIR)/fs.o $(BUILD_DIR)/logger.o $(BUILD_DIR)/dir.o
+$(TEST_BIN): src/tests.c $(BUILD_DIR)/fs.o $(BUILD_DIR)/logger.o $(BUILD_DIR)/dir.o
 	$(CC) $(CFLAGS) $(INCLUDES) $^ -o $@
 
 $(PFS_TEST_BIN): src/pfs_tests.c $(BUILD_DIR)/fs.o $(BUILD_DIR)/logger.o $(BUILD_DIR)/dir.o $(BUILD_DIR)/pfs.test.o

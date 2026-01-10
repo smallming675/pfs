@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static void test_init(void) {
   fs fs;
@@ -172,7 +173,41 @@ static void test_delete_chain(void) {
   log_msg(LOG_INFO, "test_delete_chain passed.\n");
 }
 
-int main(void) {
+void test_mount() {
+    system("fusermount -u /tmp/pfs 2>/dev/null"); // Suppress error if not mounted
+    system("rm -rf /tmp/pfs");
+    int ret = system("mkdir -p /tmp/pfs");
+    assert(ret == 0);
+    ret = system("./bin/pfs -d /tmp/pfs &");
+    assert(ret == 0);
+    // Give FUSE a moment to mount
+    sleep(1);
+}
+
+void test_file_operations() {
+    FILE *fp = fopen("/tmp/pfs/testfile.txt", "w");
+    assert(fp != NULL);
+    const char *text = "hello world";
+    size_t written = fwrite(text, 1, strlen(text), fp);
+    assert(written == strlen(text));
+    fclose(fp);
+
+    fp = fopen("/tmp/pfs/testfile.txt", "r");
+    assert(fp != NULL);
+    char buf[128];
+    size_t read = fread(buf, 1, sizeof(buf), fp);
+    assert(read == strlen(text));
+    assert(memcmp(buf, text, strlen(text)) == 0);
+    fclose(fp);
+}
+
+void test_unmount() {
+    system("sudo umount /tmp/pfs 2>/dev/null"); // Suppress error if not mounted
+    system("killall -9 pfs 2>/dev/null"); // Suppress error if process not found
+}
+
+int main(int argc, char *argv[]) {
+  set_log_level(LOG_INFO);
   test_init();
   test_create_and_read();
   test_write_overwrite();
@@ -181,6 +216,14 @@ int main(void) {
   test_overwrite_shrink_and_grow();
   test_allocator_reuse();
   test_delete_chain();
-  log_msg(LOG_INFO, "All tests passed.\n");
+  log_msg(LOG_INFO, "All unit tests passed.\n");
+
+  if (argc > 1 && strcmp(argv[1], "mount") == 0) {
+    test_mount();
+    test_file_operations();
+    test_unmount();
+    printf("All mount tests passed.\n");
+  }
+
   return 0;
 }
