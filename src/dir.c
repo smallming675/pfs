@@ -7,8 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h> // Required for time(NULL)
-#include <unistd.h> // Required for getuid(), getgid()
+#include <time.h> 
+#include <unistd.h> 
 
 /* ---------- Path Utilities ---------- */
 
@@ -197,6 +197,8 @@ int insert_file_to_dir(fs *fs, uint32_t dir_node_id, uint32_t file_node_id) {
   uint32_t count = fs->table[dir_node_id].data.dir_entry.entry_count;
   fs->table[dir_node_id].data.dir_entry.entries[count] = file_node_id;
   fs->table[dir_node_id].data.dir_entry.entry_count++;
+  fs->table[dir_node_id].st.st_mtime = time(NULL);
+  fs->table[dir_node_id].st.st_ctime = time(NULL);
   log_msg(LOG_INFO, "insert_file_to_dir: Inserted node %u into directory %u.", file_node_id,
           dir_node_id);
   log_msg(LOG_DEBUG, "insert_file_to_dir: Directory %u now has %u entries.", dir_node_id,
@@ -221,6 +223,9 @@ int remove_file_from_dir(fs *fs, uint32_t dir_node_id, uint32_t file_node_id) {
       }
       fs->table[dir_node_id].data.dir_entry.entries[count - 1] = NULL_NODE_ID; // Clear the last entry
       fs->table[dir_node_id].data.dir_entry.entry_count--;
+      // Update directory's modification times
+      fs->table[dir_node_id].st.st_mtime = time(NULL);
+      fs->table[dir_node_id].st.st_ctime = time(NULL);
       log_msg(LOG_INFO, "remove_file_from_dir: Node %u removed from directory %u.", file_node_id,
               dir_node_id);
       return 1;
@@ -283,6 +288,9 @@ int create_dir(fs *fs, uint32_t parent_id, const char *name) {
   fs->table[parent_id].data.dir_entry.entries[count] = node_id;
   fs->table[parent_id].data.dir_entry.entry_count++;
   fs->table[parent_id].st.st_nlink++; // Increment parent directory's link count
+  // Update parent directory's modification times
+  fs->table[parent_id].st.st_mtime = time(NULL);
+  fs->table[parent_id].st.st_ctime = time(NULL);
   log_msg(LOG_INFO, "create_dir: Directory '%s' created as node %u under parent %u.", name,
           node_id, parent_id);
   log_msg(LOG_DEBUG, "create_dir: Parent %u now has %u entries.", parent_id,
@@ -317,6 +325,9 @@ int delete_directory(fs *fs, const char *name, uint32_t parent_dir_node_id) {
 
     // Decrement parent directory's link count
     fs->table[parent_dir_node_id].st.st_nlink--;
+    // Update parent directory's modification times
+    fs->table[parent_dir_node_id].st.st_mtime = time(NULL);
+    fs->table[parent_dir_node_id].st.st_ctime = time(NULL);
 
     log_msg(LOG_INFO, "delete_directory: Successfully deleted directory '%s'.", name);
     return 1; // Success

@@ -4,47 +4,45 @@ LDFLAGS :=
 INCLUDES := -Iinclude
 FUSE_LIBS := `pkg-config fuse --cflags --libs`
 
-SRC := src/fs.c src/logger.c src/main.c src/dir.c
-OBJ := $(SRC:src/%.c=build/%.o)
-SRC_PFS := src/fs.c src/logger.c src/dir.c src/pfs.c
-OBJ_PFS := $(SRC_PFS:src/%.c=build/%.o)
-
 BIN_DIR := bin
 BUILD_DIR := build
-BIN := $(BIN_DIR)/fs_tool
+
+SRC := src/fs.c src/logger.c src/dir.c
+OBJ := $(SRC:src/%.c=build/%.o)
+
+SRC_PFS := src/pfs.c
+OBJ_PFS := $(BUILD_DIR)/fs.o $(BUILD_DIR)/logger.o $(BUILD_DIR)/dir.o $(BUILD_DIR)/pfs_main.o 
+
 BIN_PFS := $(BIN_DIR)/pfs
-TEST_BIN := $(BIN_DIR)/tests_runner
-PFS_TEST_BIN := $(BIN_DIR)/pfs_tests_runner
+TESTS_RUNNER := $(BIN_DIR)/tests_runner
 
-.PHONY: all clean run test dirs
+.PHONY: all clean test run
 
-all: dirs $(BIN) $(BIN_PFS)
+all: $(BUILD_DIR) $(BIN_DIR) $(BIN_PFS)
 
-dirs:
-	@mkdir -p $(BUILD_DIR) $(BIN_DIR)
+$(BUILD_DIR):
+	@mkdir -p $(BUILD_DIR)
 
-$(BIN): $(OBJ)
-	$(CC) $(CFLAGS) $(OBJ) -o $@
+$(BIN_DIR):
+	@mkdir -p $(BIN_DIR)
+
+$(BUILD_DIR)/pfs_main.o: src/pfs.c include/fs.h include/logger.h include/dir.h include/pfs.h
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $(BUILD_DIR)/pfs_main.o
+
+$(BUILD_DIR)/pfs_test.o: src/pfs.c include/fs.h include/logger.h include/dir.h include/pfs.h
+	$(CC) $(CFLAGS) $(INCLUDES) -DTEST_BUILD -c $< -o $(BUILD_DIR)/pfs_test.o
+
+$(BUILD_DIR)/%.o: src/%.c include/fs.h include/logger.h include/dir.h
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 $(BIN_PFS): $(OBJ_PFS)
 	$(CC) $(CFLAGS) $(OBJ_PFS) -o $@ $(FUSE_LIBS)
 
-$(BUILD_DIR)/%.o: src/%.c include/fs.h include/logger.h include/dir.h include/pfs.h | dirs
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
-
-
-test: dirs $(TEST_BIN) $(PFS_TEST_BIN)
-	./$(TEST_BIN)
-	./$(PFS_TEST_BIN)
-
-$(TEST_BIN): src/tests.c $(BUILD_DIR)/fs.o $(BUILD_DIR)/logger.o $(BUILD_DIR)/dir.o
-	$(CC) $(CFLAGS) $(INCLUDES) $^ -o $@
-
-$(PFS_TEST_BIN): src/pfs_tests.c $(BUILD_DIR)/fs.o $(BUILD_DIR)/logger.o $(BUILD_DIR)/dir.o $(BUILD_DIR)/pfs.test.o
+$(TESTS_RUNNER): src/tests.c $(BUILD_DIR)/fs.o $(BUILD_DIR)/logger.o $(BUILD_DIR)/dir.o $(BUILD_DIR)/pfs_test.o
 	$(CC) $(CFLAGS) $(INCLUDES) $^ -o $@ $(FUSE_LIBS)
 
-$(BUILD_DIR)/pfs.test.o: src/pfs.c include/fs.h include/logger.h include/dir.h include/pfs.h | dirs
-	$(CC) $(CFLAGS) $(INCLUDES) -DTEST_BUILD -c $< -o $@
+test: $(TESTS_RUNNER)
+	./$(TESTS_RUNNER)
 
 clean:
 	rm -rf $(BUILD_DIR) $(BIN_DIR)

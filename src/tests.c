@@ -1,11 +1,115 @@
 #include "fs.h"
 #include "logger.h"
+#include "pfs.h" 
+#include "dir.h" 
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h> 
+#include <sys/wait.h>  
+#include <fcntl.h>    
+#include <errno.h>   
+#include <dirent.h> 
 
+static uint8_t *make_buffer(size_t n, uint8_t seed) {
+  uint8_t *buf = malloc(n);
+  for (size_t i = 0; i < n; i++)
+    buf[i] = (uint8_t)(seed + (i % 251));
+  return buf;
+}
+
+static char mount_point[100];
+static pid_t fuse_child_pid = -1;
+
+static const char *create_temp_mount_point() {
+    strcpy(mount_point, "/tmp/pfs_test_XXXXXX");
+    if (mkdtemp(mount_point) == NULL) {
+        perror("mkdtemp failed");
+        return NULL;
+    }
+    log_msg(LOG_INFO, "Created temporary mount point: %s", mount_point);
+    return mount_point;
+}
+
+static void cleanup_temp_mount_point() {
+    if (mount_point[0] != '\0') {
+        char command[256];
+        snprintf(command, sizeof(command), "fusermount -u %s 2>/dev/null", mount_point);
+        system(command); 
+        
+        if (rmdir(mount_point) == -1) {
+            perror("rmdir failed");
+        }
+        log_msg(LOG_INFO, "Cleaned up temporary mount point: %s", mount_point);
+        mount_point[0] = '\0'; // Clear the path
+    }
+}
+
+static int start_pfs_fuse(const char *mount_point) {
+    fuse_child_pid = fork();
+    if (fuse_child_pid == -1) {
+        perror("fork failed");
+        return -1;
+    }
+
+    if (fuse_child_pid == 0) {
+        int fd = open("/dev/null", O_WRONLY);
+        dup2(fd, STDOUT_FILENO);
+        dup2(fd, STDERR_FILENO);
+        close(fd);
+
+        char *args[] = {"./bin/pfs", "-f", "-s", (char *)mount_point, NULL};
+        execvp(args[0], args);
+        perror("execvp failed"); 
+        _exit(1);
+    } else {
+        // Wait for FUSE to mount
+        int retries = 10; 
+        char mount_check_cmd[256];
+        snprintf(mount_check_cmd, sizeof(mount_check_cmd), "grep -qs '%s' /proc/mounts", mount_point);
+
+        while (retries > 0) {
+            if (system(mount_check_cmd) == 0) {
+                log_msg(LOG_INFO, "FUSE filesystem mounted at %s", mount_point);
+                break;
+            }
+            sleep(1);
+            retries--;
+        }
+
+        if (retries == 0) {
+            log_msg(LOG_ERROR, "FUSE filesystem failed to mount at %s within timeout.", mount_point);
+            kill(fuse_child_pid, SIGTERM);
+            return -1;
+        }
+        log_msg(LOG_INFO, "pfs FUSE daemon started with PID: %d", fuse_child_pid);
+    }
+    return 0;
+}
+
+static void stop_pfs_fuse(const char *mount_point) {
+    if (mount_point[0] != '\0') {
+        char command[256];
+        snprintf(command, sizeof(command), "fusermount -u %s", mount_point);
+        if (system(command) == -1) {
+            perror("fusermount -u failed");
+        }
+        log_msg(LOG_INFO, "Unmounted FUSE filesystem from %s", mount_point);
+    }
+
+    if (fuse_child_pid != -1) {
+        kill(fuse_child_pid, SIGTERM);
+        int status;
+        waitpid(fuse_child_pid, &status, 0);
+        log_msg(LOG_INFO, "pfs FUSE daemon (PID: %d) stopped.", fuse_child_pid);
+        fuse_child_pid = -1;
+    }
+}
+
+
+// Test functions from tests.c
 static void test_init(void) {
   fs fs;
   assert(fs_init(&fs, 16));
@@ -66,23 +170,16 @@ static void test_delete(void) {
 
   uint64_t size = 0;
   uint8_t *buf = read_file(&fs, name, ROOT, 0, &size);
-  assert(buf == NULL); /* should not exist */
+  assert(buf == NULL); 
   fs_free(&fs);
   log_msg(LOG_INFO, "test_delete passed.\n");
-}
-
-static uint8_t *make_buffer(size_t n, uint8_t seed) {
-  uint8_t *buf = malloc(n);
-  for (size_t i = 0; i < n; i++)
-    buf[i] = (uint8_t)(seed + (i % 251));
-  return buf;
 }
 
 static void test_multi_node_file(void) {
   fs fs;
   assert(fs_init(&fs, 128));
 
-  size_t big_size = DATA_BYTES_PER_NODE * 3 + 100; /* spans 4 nodes */
+  size_t big_size = DATA_BYTES_PER_NODE * 3 + 100; 
   uint8_t *buf = make_buffer(big_size, 42);
 
   assert(create_file(&fs, "bigfile", ROOT, buf, big_size));
@@ -173,41 +270,119 @@ static void test_delete_chain(void) {
   log_msg(LOG_INFO, "test_delete_chain passed.\n");
 }
 
-void test_mount() {
-    system("fusermount -u /tmp/pfs 2>/dev/null"); // Suppress error if not mounted
-    system("rm -rf /tmp/pfs");
-    int ret = system("mkdir -p /tmp/pfs");
-    assert(ret == 0);
-    ret = system("./bin/pfs -d /tmp/pfs &");
-    assert(ret == 0);
-    // Give FUSE a moment to mount
-    sleep(1);
+
+// Test functions from pfs_tests.c
+static void test_pfs_interaction(void) {
+  assert(fs_init(&my_fs, 1000));
+  set_log_level(LOG_DEBUG);
+
+  assert(create_file(&my_fs, "testfile", ROOT, (const uint8_t *)"test", 4));
+
+  struct stat stbuf;
+  assert(pfs_getattr("/testfile", &stbuf) == 0);
+  assert(stbuf.st_size == 4);
+
+  char read_buf[10];
+  assert(pfs_read("/testfile", read_buf, 4, 0, NULL) == 4);
+  assert(memcmp(read_buf, "test", 4) == 0);
+
+  fs_free(&my_fs);
+  log_msg(LOG_INFO, "test_pfs_interaction passed.\n");
 }
 
-void test_file_operations() {
-    FILE *fp = fopen("/tmp/pfs/testfile.txt", "w");
-    assert(fp != NULL);
-    const char *text = "hello world";
-    size_t written = fwrite(text, 1, strlen(text), fp);
-    assert(written == strlen(text));
-    fclose(fp);
+static void test_fuse_file_operations(void) {
+    log_msg(LOG_INFO, "Starting FUSE integration tests...");
 
-    fp = fopen("/tmp/pfs/testfile.txt", "r");
-    assert(fp != NULL);
-    char buf[128];
-    size_t read = fread(buf, 1, sizeof(buf), fp);
-    assert(read == strlen(text));
-    assert(memcmp(buf, text, strlen(text)) == 0);
-    fclose(fp);
+    const char *mount_point_path = create_temp_mount_point();
+    assert(mount_point_path != NULL);
+
+    assert(start_pfs_fuse(mount_point_path) == 0);
+
+    char filepath[256];
+    snprintf(filepath, sizeof(filepath), "%s/testfile.txt", mount_point_path);
+    const char *test_content = "Hello, FUSE!";
+    size_t test_content_len = strlen(test_content);
+
+    // Test 1: Create and Write to a file
+    log_msg(LOG_INFO, "Test 1: Creating and writing to %s", filepath);
+    int fd = open(filepath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    assert(fd != -1);
+    assert(write(fd, test_content, test_content_len) == (ssize_t)test_content_len);
+    close(fd);
+    log_msg(LOG_INFO, "Test 1 Passed: File created and content written.");
+
+    // Test 2: Read from the file
+    log_msg(LOG_INFO, "Test 2: Reading from %s", filepath);
+    char read_buf[256] = {0};
+    fd = open(filepath, O_RDONLY);
+    assert(fd != -1);
+    assert(read(fd, read_buf, test_content_len) == (ssize_t)test_content_len);
+    assert(strcmp(read_buf, test_content) == 0);
+    close(fd);
+    log_msg(LOG_INFO, "Test 2 Passed: Content read matches written content.");
+
+    // Test 3: Stat the file
+    log_msg(LOG_INFO, "Test 3: Stat-ing %s", filepath);
+    struct stat st;
+    assert(stat(filepath, &st) == 0);
+    assert(st.st_size == (off_t)test_content_len);
+    assert(S_ISREG(st.st_mode));
+    log_msg(LOG_INFO, "Test 3 Passed: File size and mode are correct.");
+
+    // Test 4: Create a directory
+    char dirpath[256];
+    snprintf(dirpath, sizeof(dirpath), "%s/testdir", mount_point_path);
+    log_msg(LOG_INFO, "Test 4: Creating directory %s", dirpath);
+    assert(mkdir(dirpath, 0755) == 0);
+    log_msg(LOG_INFO, "Test 4 Passed: Directory created.");
+
+    // Test 5: List directory contents
+    log_msg(LOG_INFO, "Test 5: Listing directory %s", mount_point_path);
+    DIR *dp = opendir(mount_point_path);
+    assert(dp != NULL);
+    struct dirent *de;
+    int found_testfile = 0;
+    int found_testdir = 0;
+    while ((de = readdir(dp)) != NULL) {
+        if (strcmp(de->d_name, "testfile.txt") == 0) {
+            found_testfile = 1;
+        }
+        if (strcmp(de->d_name, "testdir") == 0) {
+            found_testdir = 1;
+        }
+    }
+    closedir(dp);
+    assert(found_testfile == 1);
+    assert(found_testdir == 1);
+    log_msg(LOG_INFO, "Test 5 Passed: Listed files and directories correctly.");
+
+    // Test 6: Delete the file
+    log_msg(LOG_INFO, "Test 6: Deleting file %s", filepath);
+    assert(unlink(filepath) == 0);
+    assert(access(filepath, F_OK) == -1 && errno == ENOENT); 
+    log_msg(LOG_INFO, "Test 6 Passed: File deleted.");
+
+    snprintf(dirpath, sizeof(dirpath), "%s/testdir", mount_point_path); 
+    log_msg(LOG_INFO, "Test 7: Deleting directory %s", dirpath);
+    int res = rmdir(dirpath);
+    if (res != 0) {
+        log_msg(LOG_ERROR, "rmdir failed with errno: %d (%s)", errno, strerror(errno));
+    }
+    assert(res == 0);
+    assert(access(dirpath, F_OK) == -1 && errno == ENOENT); 
+    log_msg(LOG_INFO, "Test 7 Passed: Directory deleted.");
+    
+    log_msg(LOG_INFO, "All FUSE integration tests passed.");
+
+    stop_pfs_fuse(mount_point_path);
+    cleanup_temp_mount_point();
 }
 
-void test_unmount() {
-    system("sudo umount /tmp/pfs 2>/dev/null"); // Suppress error if not mounted
-    system("killall -9 pfs 2>/dev/null"); // Suppress error if process not found
-}
 
-int main(int argc, char *argv[]) {
+int main(void) {
   set_log_level(LOG_INFO);
+
+  // Unit tests from former tests.c
   test_init();
   test_create_and_read();
   test_write_overwrite();
@@ -217,13 +392,11 @@ int main(int argc, char *argv[]) {
   test_allocator_reuse();
   test_delete_chain();
   log_msg(LOG_INFO, "All unit tests passed.\n");
-
-  if (argc > 1 && strcmp(argv[1], "mount") == 0) {
-    test_mount();
-    test_file_operations();
-    test_unmount();
-    printf("All mount tests passed.\n");
-  }
+  test_pfs_interaction();
+  log_msg(LOG_INFO, "PFS interaction test passed.\n");
+  test_fuse_file_operations();
+  log_msg(LOG_INFO, "All FUSE integration tests passed.\n");
+  log_msg(LOG_INFO, "All tests passed.\n");
 
   return 0;
 }

@@ -1,10 +1,5 @@
-# Binaries and object files
 bin/
 build/
-
-# IDE and editor specific files
 .cache/
 compile_commands.json
-
-# Image files
 *.img

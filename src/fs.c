@@ -626,6 +626,9 @@ int delete_file(fs *fs, const char *name, uint32_t dir_node_id) {
   }
 
   remove_file_from_dir(fs, dir_node_id, head_id);
+  // Update parent directory's modification times
+  fs->table[dir_node_id].st.st_mtime = time(NULL);
+  fs->table[dir_node_id].st.st_ctime = time(NULL);
   fs_node *head = &fs->table[head_id];
   if (head->status == NODE_SINGLE_NODE_FILE) {
     fs_deallocate_node(fs, head_id);
