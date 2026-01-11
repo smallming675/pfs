@@ -43,7 +43,7 @@ static void cleanup_temp_mount_point() {
             perror("rmdir failed");
         }
         log_msg(LOG_INFO, "Cleaned up temporary mount point: %s", mount_point);
-        mount_point[0] = '\0'; // Clear the path
+        mount_point[0] = '\0'; 
     }
 }
 
@@ -109,7 +109,6 @@ static void stop_pfs_fuse(const char *mount_point) {
 }
 
 
-// Test functions from tests.c
 static void test_init(void) {
   fs fs;
   assert(fs_init(&fs, 16));
@@ -205,7 +204,6 @@ static void test_overwrite_shrink_and_grow(void) {
   uint8_t *buf2 = make_buffer(10, 99);
   uint8_t *buf3 = make_buffer(DATA_BYTES_PER_NODE * 5, 77);
 
-  /* grow */
   assert(write_file(&fs, name, ROOT, buf1, DATA_BYTES_PER_NODE * 2));
   uint64_t size = 0;
   uint8_t *out = read_file(&fs, name, ROOT, 0, &size);
@@ -213,14 +211,12 @@ static void test_overwrite_shrink_and_grow(void) {
   assert(memcmp(out, buf1, size) == 0);
   free(out);
 
-  /* shrink */
   assert(write_file(&fs, name, ROOT, buf2, 10));
   out = read_file(&fs, name, ROOT, 0, &size);
   assert(size == 10);
   assert(memcmp(out, buf2, 10) == 0);
   free(out);
 
-  /* grow again */
   assert(write_file(&fs, name, ROOT, buf3, DATA_BYTES_PER_NODE * 5));
   out = read_file(&fs, name, ROOT, 0, &size);
   assert(size == DATA_BYTES_PER_NODE * 5);
@@ -270,8 +266,40 @@ static void test_delete_chain(void) {
   log_msg(LOG_INFO, "test_delete_chain passed.\n");
 }
 
+static void test_symlinks(void) {
+  fs fs;
+  assert(fs_init(&fs, 64));
 
-// Test functions from pfs_tests.c
+  const char *file_name = "original_file";
+  const char *file_content = "This is the original content.";
+  assert(create_file(&fs, file_name, ROOT, (const uint8_t *)file_content, strlen(file_content)));
+
+  const char *symlink_name = "link_to_file";
+  assert(fs_symlink(&fs, file_name, symlink_name) == 0);
+
+  uint64_t size = 0;
+  uint8_t *read_symlink_content = read_file(&fs, symlink_name, ROOT, false, &size);
+  assert(read_symlink_content != NULL);
+  assert(size == strlen(file_content));
+  assert(memcmp(read_symlink_content, file_content, size) == 0);
+  free(read_symlink_content);
+
+  char target_buf[FILE_NAME_SIZE];
+  assert(pfs_readlink(symlink_name, target_buf, FILE_NAME_SIZE) == 0);
+  assert(strcmp(target_buf, file_name) == 0);
+
+  struct stat st;
+  uint32_t symlink_node_id = get_node_from_path(&fs, symlink_name);
+  assert(symlink_node_id != NULL_NODE_ID);
+  memcpy(&st, &fs.table[symlink_node_id].st, sizeof(struct stat));
+  assert(S_ISLNK(st.st_mode)); 
+  assert(st.st_size == (off_t)strlen(file_name)); 
+
+  fs_free(&fs);
+  log_msg(LOG_INFO, "test_symlinks passed.\n");
+}
+
+
 static void test_pfs_interaction(void) {
   assert(fs_init(&my_fs, 1000));
   set_log_level(LOG_DEBUG);
@@ -303,7 +331,6 @@ static void test_fuse_file_operations(void) {
     const char *test_content = "Hello, FUSE!";
     size_t test_content_len = strlen(test_content);
 
-    // Test 1: Create and Write to a file
     log_msg(LOG_INFO, "Test 1: Creating and writing to %s", filepath);
     int fd = open(filepath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     assert(fd != -1);
@@ -311,7 +338,6 @@ static void test_fuse_file_operations(void) {
     close(fd);
     log_msg(LOG_INFO, "Test 1 Passed: File created and content written.");
 
-    // Test 2: Read from the file
     log_msg(LOG_INFO, "Test 2: Reading from %s", filepath);
     char read_buf[256] = {0};
     fd = open(filepath, O_RDONLY);
@@ -321,7 +347,6 @@ static void test_fuse_file_operations(void) {
     close(fd);
     log_msg(LOG_INFO, "Test 2 Passed: Content read matches written content.");
 
-    // Test 3: Stat the file
     log_msg(LOG_INFO, "Test 3: Stat-ing %s", filepath);
     struct stat st;
     assert(stat(filepath, &st) == 0);
@@ -329,14 +354,12 @@ static void test_fuse_file_operations(void) {
     assert(S_ISREG(st.st_mode));
     log_msg(LOG_INFO, "Test 3 Passed: File size and mode are correct.");
 
-    // Test 4: Create a directory
     char dirpath[256];
     snprintf(dirpath, sizeof(dirpath), "%s/testdir", mount_point_path);
     log_msg(LOG_INFO, "Test 4: Creating directory %s", dirpath);
     assert(mkdir(dirpath, 0755) == 0);
     log_msg(LOG_INFO, "Test 4 Passed: Directory created.");
 
-    // Test 5: List directory contents
     log_msg(LOG_INFO, "Test 5: Listing directory %s", mount_point_path);
     DIR *dp = opendir(mount_point_path);
     assert(dp != NULL);
@@ -355,8 +378,17 @@ static void test_fuse_file_operations(void) {
     assert(found_testfile == 1);
     assert(found_testdir == 1);
     log_msg(LOG_INFO, "Test 5 Passed: Listed files and directories correctly.");
+    
+    char symlink_path[256];
+    snprintf(symlink_path, sizeof(symlink_path), "%s/symlink_to_file", mount_point_path);
+    assert(symlink("testfile.txt", symlink_path) == 0); 
 
-    // Test 6: Delete the file
+    char readlink_buf[256];
+    ssize_t link_len = readlink(symlink_path, readlink_buf, sizeof(readlink_buf) - 1);
+    assert(link_len > 0);
+    readlink_buf[link_len] = '\0';
+    assert(strcmp(readlink_buf, "testfile.txt") == 0);
+    
     log_msg(LOG_INFO, "Test 6: Deleting file %s", filepath);
     assert(unlink(filepath) == 0);
     assert(access(filepath, F_OK) == -1 && errno == ENOENT); 
@@ -380,9 +412,8 @@ static void test_fuse_file_operations(void) {
 
 
 int main(void) {
-  set_log_level(LOG_INFO);
+  set_log_level(LOG_DEBUG);
 
-  // Unit tests from former tests.c
   test_init();
   test_create_and_read();
   test_write_overwrite();
@@ -391,11 +422,10 @@ int main(void) {
   test_overwrite_shrink_and_grow();
   test_allocator_reuse();
   test_delete_chain();
-  log_msg(LOG_INFO, "All unit tests passed.\n");
+  
+  test_symlinks();
   test_pfs_interaction();
-  log_msg(LOG_INFO, "PFS interaction test passed.\n");
   test_fuse_file_operations();
-  log_msg(LOG_INFO, "All FUSE integration tests passed.\n");
   log_msg(LOG_INFO, "All tests passed.\n");
 
   return 0;

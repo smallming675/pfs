@@ -4,8 +4,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <sys/stat.h> // Include for struct stat
+#include <sys/stat.h> 
 
+#define MAX_SYMLINK_DEPTH 8
 #define FILE_NAME_SIZE 64
 #define ROOT 0
 #define DATA_BYTES_PER_NODE 1024
@@ -15,17 +16,18 @@
 
 typedef enum {
   NODE_FREE = 0,
-  NODE_USED = 1,      /* allocated (allocator bookkeeping) */
-  NODE_DIR_ENTRY = 2, /* node 0, root directory name */
+  NODE_USED = 1,      
+  NODE_DIR_ENTRY = 2, 
   NODE_SINGLE_NODE_FILE = 3,
-  NODE_FILE_START = 4, /* header node */
-  NODE_FILE_DATA = 5,  /* intermediate data node */
-  NODE_FILE_END = 6    /* tail data node */
+  NODE_FILE_START = 4, 
+  NODE_FILE_DATA = 5, 
+  NODE_FILE_END = 6,  
+  NODE_SYMLINK = 7
 } node_status;
 
 typedef struct {
   char dir_name[FILE_NAME_SIZE];
-  uint32_t entry_count; // Moved back to dir_entry
+  uint32_t entry_count; 
   uint32_t entries[DIR_ENTRIES_COUNT];
 } dir_entry;
 
@@ -41,10 +43,15 @@ typedef struct {
   uint8_t data[DATA_BYTES_PER_NODE];
 } data_file;
 
+typedef struct {
+  char target_path[FILE_NAME_SIZE];
+} symlink_data;
+
 typedef union {
   dir_entry dir_entry;
   header_file header_file;
   data_file data_file;
+  symlink_data symlink;
 } node_data;
 
 typedef struct {
@@ -72,6 +79,8 @@ uint8_t *fs_read_os_file(const char *filename, size_t *out_bytes);
 int fs_write_os_file(const char *filename, const uint8_t *data, size_t bytes);
 
 int fs_init(fs *fs, uint32_t nodes);
+int fs_load(fs *fs, const char *image_path);
+int fs_symlink(fs *fs, const char *target, const char *newpath);
 int fs_from_image(fs *fs, void *buffer, size_t bytes);
 int fs_to_image(const fs *fs, uint8_t **out_buf, size_t *out_bytes);
 void fs_free(fs *fs);
@@ -96,6 +105,7 @@ int fs_read_image(fs *fs, const char *filename);
 const fs_info *fs_meta(const fs *fs);
 const fs_node *fs_table(const fs *fs);
 size_t fs_table_size(const fs *fs);
+
 uint32_t get_node_from_path(const fs *fs, const char *path);
 
 extern fs my_fs;

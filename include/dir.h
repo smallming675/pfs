@@ -19,6 +19,7 @@ typedef struct {
   char *filename;
 } resolved_path;
 
+bool has_name_conflict(const fs *fs, uint32_t dir_node_id, const char *name);
 int create_file_at_dir(fs *fs, uint32_t dir_node_id, const char *file_name,
                        const uint8_t *data, uint64_t size);
 bool is_valid_dir(const fs *fs, const char *dir_name, uint32_t dir_node_id);

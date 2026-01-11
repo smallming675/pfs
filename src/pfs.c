@@ -25,12 +25,21 @@ int pfs_getattr(const char *path, struct stat *stbuf) {
     log_msg(LOG_ERROR, "pfs_getattr: Path not found: %s", path);
     return -ENOENT;
   }
-  memcpy(stbuf, &my_fs.table[node_id].st, sizeof(struct stat));
+
+  fs_node *node = &my_fs.table[node_id];
+  memcpy(stbuf, &node->st, sizeof(struct stat));
+
+  if (node->status == NODE_SYMLINK) {
+    stbuf->st_mode = S_IFLNK | 0777;
+    stbuf->st_size = strlen(node->data.symlink.target_path);
+  }
+
   log_msg(LOG_INFO, "pfs_getattr: Retrieved attributes for %s (node_id: %u).",
           path, node_id);
 
   return 0;
 }
+
 int pfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
                 off_t offset, struct fuse_file_info *fi) {
   (void)offset;
@@ -63,8 +72,11 @@ int pfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
       if (entry_node->status == NODE_DIR_ENTRY) {
         entry_name = entry_node->data.dir_entry.dir_name;
       } else if (entry_node->status == NODE_SINGLE_NODE_FILE ||
-                 entry_node->status == NODE_FILE_START) {
-        entry_name = entry_node->data.header_file.file_name;
+                 entry_node->status == NODE_FILE_START ||
+                 entry_node->status == NODE_SYMLINK) { // Add symlink here
+        entry_name =
+            entry_node->data.header_file
+                .file_name; // Assuming symlinks also have a file_name field
       }
       if (entry_name) {
         filler(buf, entry_name, &entry_node->st, 0);
@@ -76,6 +88,7 @@ int pfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
   log_msg(LOG_INFO, "pfs_readdir: Successfully listed directory: %s", path);
   return 0;
 }
+
 int pfs_read(const char *path, char *buf, size_t size, off_t offset,
              struct fuse_file_info *fi) {
   log_msg(LOG_DEBUG, "pfs_read: path='%s', size=%zu, offset=%lld", path, size,
@@ -86,6 +99,12 @@ int pfs_read(const char *path, char *buf, size_t size, off_t offset,
   if (node_id == NULL_NODE_ID) {
     log_msg(LOG_ERROR, "pfs_read: File not found: %s", path);
     return -ENOENT;
+  }
+
+  if (my_fs.table[node_id].status == NODE_SYMLINK) {
+    log_msg(LOG_ERROR, "pfs_read: Cannot read from a symlink directly: %s",
+            path);
+    return -EINVAL; // Or resolve the symlink and read its target
   }
 
   if (!S_ISREG(my_fs.table[node_id].st.st_mode)) {
@@ -115,6 +134,7 @@ int pfs_read(const char *path, char *buf, size_t size, off_t offset,
 
   return bytes_to_read;
 }
+
 int pfs_write(const char *path, const char *buf, size_t size, off_t offset,
               struct fuse_file_info *fi) {
   log_msg(LOG_DEBUG, "pfs_write: path='%s', size=%zu, offset=%lld", path, size,
@@ -268,7 +288,7 @@ int pfs_rmdir(const char *path) {
     log_msg(LOG_ERROR, "pfs_rmdir: Cannot remove root directory.");
     return -EPERM;
   }
-  log_msg(LOG_DEBUG, "pfs_rmdir: Root directory (node 0) has %u entries before lookup.", my_fs.table[ROOT].data.dir_entry.entry_count);
+
   uint32_t node_id = get_node_from_path(&my_fs, path);
   log_msg(LOG_DEBUG,
           "pfs_rmdir: get_node_from_path for '%s' returned node_id: %u", path,
@@ -290,6 +310,35 @@ int pfs_rmdir(const char *path) {
     return -EIO;
   }
   log_msg(LOG_INFO, "pfs_rmdir: Successfully deleted directory: %s", path);
+  return 0;
+}
+
+int pfs_symlink(const char *target, const char *newpath) {
+  log_msg(LOG_DEBUG, "pfs_symlink: target='%s', newpath='%s'", target, newpath);
+  return fs_symlink(&my_fs, target, newpath);
+}
+
+int pfs_readlink(const char *path, char *buf, size_t size) {
+  log_msg(LOG_DEBUG, "pfs_readlink: path='%s', size=%zu", path, size);
+
+  uint32_t node_id = get_node_from_path(&my_fs, path);
+  if (node_id == NULL_NODE_ID) {
+    log_msg(LOG_ERROR, "pfs_readlink: Path not found: %s", path);
+    return -ENOENT;
+  }
+
+  fs_node *node = &my_fs.table[node_id];
+  if (node->status != NODE_SYMLINK) {
+    log_msg(LOG_ERROR, "pfs_readlink: Not a symbolic link: %s", path);
+    return -EINVAL;
+  }
+
+  const char *target_path = node->data.symlink.target_path;
+  strncpy(buf, target_path, size);
+  buf[size - 1] = '\0';
+
+  log_msg(LOG_INFO, "pfs_readlink: Read symlink '%s' target '%s'.", path,
+          target_path);
   return 0;
 }
 
@@ -335,30 +384,28 @@ int pfs_fallocate(const char *path, int mode, off_t offset, off_t length,
   (void)fi;
   return 0;
 }
+
 int pfs_flush(const char *path, struct fuse_file_info *fi) {
   (void)path;
   (void)fi;
   return 0;
 }
+
 static void *pfs_init(struct fuse_conn_info *conn) {
   (void)conn;
-  log_msg(LOG_INFO, "pfs_init: FUSE filesystem "
-                    "initialized.");
   return NULL;
 }
-static void pfs_destroy(void *private_data) {
-  (void)private_data;
-  log_msg(LOG_INFO, "pfs_destroy: FUSE filesystem "
-                    "destroyed.");
-}
+
+static void pfs_destroy(void *private_data) { (void)private_data; }
+
 static struct fuse_operations pfs_oper = {
     .getattr = pfs_getattr,
-    .readlink = NULL,
+    .readlink = pfs_readlink,
     .mknod = pfs_mknod,
     .mkdir = pfs_mkdir,
     .unlink = pfs_unlink,
     .rmdir = pfs_rmdir,
-    .symlink = NULL,
+    .symlink = pfs_symlink,
     .rename = NULL,
     .link = NULL,
     .chmod = NULL,
@@ -428,9 +475,15 @@ int main(int argc, char *argv[]) {
   }
 
   argc = new_argc;
-  fs_init(&my_fs, 1000);
-  log_msg(LOG_INFO, "main: FUSE file system "
-                    "initialized with 1000 nodes.");
+  if (!fs_load(&my_fs, "disk.img")) {
+    log_msg(LOG_WARN,
+            "main: Failed to load disk.img. Initializing a new file system.");
+    if (!fs_init(&my_fs, 1000)) {
+      log_msg(LOG_ERROR, "main: Failed to initialize new file system.");
+      return 1;
+    }
+  }
+  log_msg(LOG_INFO, "main: FUSE file system initialized/loaded.");
   ret = fuse_main(argc, argv, &pfs_oper, NULL);
   return ret;
 }

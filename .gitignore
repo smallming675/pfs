@@ -1,5 +1,5 @@
-bin/
-build/
-.cache/
+bin/*
+build/*
+.cache/*
 compile_commands.json
 *.img
