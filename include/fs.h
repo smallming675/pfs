@@ -45,6 +45,7 @@ typedef struct {
 
 typedef struct {
   char target_path[FILE_NAME_SIZE];
+  char link_name[FILE_NAME_SIZE]; 
 } symlink_data;
 
 typedef union {
@@ -81,6 +82,7 @@ int fs_write_os_file(const char *filename, const uint8_t *data, size_t bytes);
 int fs_init(fs *fs, uint32_t nodes);
 int fs_load(fs *fs, const char *image_path);
 int fs_symlink(fs *fs, const char *target, const char *newpath);
+int fs_readlink(fs *fs, const char *path, char *buf, size_t size);
 int fs_from_image(fs *fs, void *buffer, size_t bytes);
 int fs_to_image(const fs *fs, uint8_t **out_buf, size_t *out_bytes);
 void fs_free(fs *fs);
@@ -88,9 +90,8 @@ void fs_free(fs *fs);
 uint32_t fs_allocate_node(fs *fs);
 void fs_deallocate_node(fs *fs, uint32_t id);
 
-uint32_t find_dir_node(const fs *fs, const char *dir_name,
-                       uint32_t dir_node_id);
-uint32_t find_file_node(const fs *fs, const char *name, uint32_t dir_node_id);
+
+uint32_t find_node(const fs *fs, const char *name, uint32_t dir_node_id, bool follow_symlinks);
 int create_file(fs *fs, const char *name, uint32_t dir_node_id,
                 const uint8_t *data, uint64_t size);
 int write_file(fs *fs, const char *name, uint32_t dir_node_id,
@@ -106,7 +107,8 @@ const fs_info *fs_meta(const fs *fs);
 const fs_node *fs_table(const fs *fs);
 size_t fs_table_size(const fs *fs);
 
-uint32_t get_node_from_path(const fs *fs, const char *path);
+uint32_t get_node_from_path(const fs *fs, const char *path, bool follow_symlinks);
 
-extern fs my_fs;
+
+extern fs file_system;
 #endif

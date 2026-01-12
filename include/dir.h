@@ -28,7 +28,7 @@ void free_resolved_path(resolved_path *rp);
 resolved_path resolve_path(fs *fs, const char *path, uint32_t start_dir);
 int create_dir(fs *fs, uint32_t dir_node_id, const char *dir_name);
 int remove_file_from_dir(fs *fs, uint32_t dir_node_id, uint32_t file_node_id);
-int insert_file_to_dir(fs *fs, uint32_t dir_node_id, uint32_t file_node_id);
+int insert_node_to_dir(fs *fs, uint32_t dir_node_id, uint32_t file_node_id);
 int write_from_path(fs *fs, const char *file_path, const uint8_t *data,
                     uint64_t size);
 uint8_t *read_from_path(fs *fs, const char *path, int meta_only,

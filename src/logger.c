@@ -31,7 +31,7 @@ LogLevel log_level_from_str(const char *level_str) {
   } else if (strcmp(level_str, "ERROR") == 0) {
     return LOG_ERROR;
   } else
-    return LOG_INFO; // Default to INFO
+    return LOG_INFO; 
 }
 
 void log_msg(LogLevel level, const char *fmt, ...) {

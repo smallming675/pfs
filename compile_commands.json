@@ -12,26 +12,6 @@
       "-Iinclude",
       "-c",
       "-o",
-      "build/main.o",
-      "src/main.c"
-    ],
-    "directory": "/home/user/projects/pfs",
-    "file": "/home/user/projects/pfs/src/main.c",
-    "output": "/home/user/projects/pfs/build/main.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-O2",
-      "-Wall",
-      "-Wextra",
-      "-Werror",
-      "-pedantic",
-      "-g",
-      "-D_FILE_OFFSET_BITS=64",
-      "-Iinclude",
-      "-c",
-      "-o",
       "build/pfs.o",
       "src/pfs.c"
     ],
