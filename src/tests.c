@@ -309,7 +309,8 @@ static void test_pfs_interaction(void) {
   assert(fs_init(&my_fs, 1000) == 0);
   set_log_level(LOG_DEBUG);
 
-  assert(create_file(&my_fs, "testfile", ROOT, (const uint8_t *)"test", 4) == 0);
+  assert(create_file(&my_fs, "testfile", ROOT, (const uint8_t *)"test", 4) ==
+         0);
 
   struct stat stbuf;
   uint32_t testfile_node_id = find_node(&my_fs, "testfile", ROOT, true);
@@ -329,233 +330,110 @@ static void test_pfs_interaction(void) {
 }
 
 static void test_fuse_file_operations(void) {
-
   log_msg(LOG_INFO, "Starting FUSE integration tests...");
-
-
-
   const char *mount_point_path = create_temp_mount_point();
-
   assert(mount_point_path != NULL);
-
-
-
   assert(!start_pfs_fuse(mount_point_path));
-
-
-
   char filepath[256];
 
   snprintf(filepath, sizeof(filepath), "%s/testfile.txt", mount_point_path);
-
   const char *test_content = "Hello, FUSE!";
-
   size_t test_content_len = strlen(test_content);
-
-
-
   log_msg(LOG_INFO, "Test 1: Creating and writing to %s", filepath);
 
   int fd = open(filepath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-
   assert(fd != -1);
-
   assert(write(fd, test_content, test_content_len) ==
-
          (ssize_t)test_content_len);
-
   close(fd);
-
   log_msg(LOG_INFO, "Test 1 Passed: File created and content written.");
-
-
-
   log_msg(LOG_INFO, "Test 2: Reading from %s", filepath);
 
   char read_buf[256] = {0};
-
   fd = open(filepath, O_RDONLY);
-
   assert(fd != -1);
-
   assert(read(fd, read_buf, test_content_len) == (ssize_t)test_content_len);
-
   assert(strcmp(read_buf, test_content) == 0);
-
   close(fd);
-
   log_msg(LOG_INFO, "Test 2 Passed: Content read matches written content.");
 
-
-
   log_msg(LOG_INFO, "Test 3: Stat-ing %s", filepath);
-
   struct stat st;
-
   assert(stat(filepath, &st) == 0);
-
   assert(st.st_size == (off_t)test_content_len);
-
   assert(S_ISREG(st.st_mode));
-
   log_msg(LOG_INFO, "Test 3 Passed: File size and mode are correct.");
 
-
-
   char dirpath[256];
-
   snprintf(dirpath, sizeof(dirpath), "%s/testdir", mount_point_path);
-
   log_msg(LOG_INFO, "Test 4: Creating directory %s", dirpath);
-
   assert(mkdir(dirpath, 0755) == 0);
-
   log_msg(LOG_INFO, "Test 4 Passed: Directory created.");
 
-
-
   log_msg(LOG_INFO, "Test 5: Listing directory %s", mount_point_path);
-
   DIR *dp = opendir(mount_point_path);
-
   assert(dp != NULL);
-
   struct dirent *de;
-
   int found_testfile = 0;
-
   int found_testdir = 0;
-
   while ((de = readdir(dp)) != NULL) {
-
     if (strcmp(de->d_name, "testfile.txt") == 0) {
-
       found_testfile = 1;
-
+      if (strcmp(de->d_name, "testdir") == 0) {
+        found_testdir = 1;
+      }
     }
-
-    if (strcmp(de->d_name, "testdir") == 0) {
-
-      found_testdir = 1;
-
-    }
-
   }
 
   closedir(dp);
-
   assert(found_testfile == 1);
-
   assert(found_testdir == 1);
-
   log_msg(LOG_INFO, "Test 5 Passed: Listed files and directories correctly.");
 
-
-
   char symlink_path[256];
-
   snprintf(symlink_path, sizeof(symlink_path), "%s/symlink_to_file",
-
            mount_point_path);
-
   assert(symlink("testfile.txt", symlink_path) == 0);
-
-
-
   char readlink_buf[256];
-
   ssize_t link_len =
-
       readlink(symlink_path, readlink_buf, sizeof(readlink_buf) - 1);
-
   assert(link_len > 0);
-
   readlink_buf[link_len] = '\0';
-
   assert(strcmp(readlink_buf, "testfile.txt") == 0);
 
-
-
   log_msg(LOG_INFO, "Test 6: Deleting file %s", filepath);
-
   assert(unlink(filepath) == 0);
-
   assert(access(filepath, F_OK) == -1 && errno == ENOENT);
-
   log_msg(LOG_INFO, "Test 6 Passed: File deleted.");
 
-
-
   snprintf(dirpath, sizeof(dirpath), "%s/testdir", mount_point_path);
-
   log_msg(LOG_INFO, "Test 7: Deleting directory %s", dirpath);
-
   int res = rmdir(dirpath);
-
   if (res != 0) {
-
     log_msg(LOG_ERROR, "rmdir failed with errno: %d (%s)", errno,
-
             strerror(errno));
-
   }
-
   assert(res == 0);
-
   assert(access(dirpath, F_OK) == -1 && errno == ENOENT);
-
   log_msg(LOG_INFO, "Test 7 Passed: Directory deleted.");
-
-
-
   log_msg(LOG_INFO, "All FUSE integration tests passed.");
-
-
-
   stop_pfs_fuse(mount_point_path);
-
   cleanup_temp_mount_point();
-
 }
-
-
 
 int main(void) {
-
   set_log_level(LOG_DEBUG);
-
-
-
   test_init();
-
   test_create_and_read();
-
   test_write_overwrite();
-
   test_delete();
-
   test_multi_node_file();
-
   test_overwrite_shrink_and_grow();
-
   test_allocator_reuse();
-
   test_delete_chain();
-
-
-
   test_symlinks();
-
   test_pfs_interaction();
-
   test_fuse_file_operations();
-
   log_msg(LOG_INFO, "All tests passed.\n");
-
-
-
   return 0;
-
 }
-
-
