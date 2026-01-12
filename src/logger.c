@@ -41,9 +41,7 @@ LogLevel log_level_from_str(const char *level_str) {
 }
 
 void log_msg(LogLevel level, const char *fmt, ...) {
-  if (level < g_log_level) {
-    return;
-  }
+  if (level < g_log_level) return;
   time_t t = time(NULL);
   struct tm tm = *localtime(&t);
   char ts[64];

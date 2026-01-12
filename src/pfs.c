@@ -7,15 +7,15 @@
 #include <fcntl.h>
 #include <fuse.h>
 #include <fuse_opt.h>
-#include <signal.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
+#include <stdlib.h>
 
-#ifndef TEST_BUILD
 fs file_system;
 
+#ifndef TEST_BUILD
 char *mount_point = NULL;
 struct fuse_chan *g_ch = NULL;
 struct fuse *g_fuse = NULL;
@@ -34,6 +34,8 @@ static void unmount_handler(int sig) {
   signal(sig, SIG_DFL);
   raise(sig);
 }
+#endif
+
 
 int pfs_getattr(const char *path, struct stat *stbuf) {
   log_msg(LOG_DEBUG, "pfs_getattr: path='%s'", path);
@@ -45,7 +47,7 @@ int pfs_getattr(const char *path, struct stat *stbuf) {
     return 0;
   }
 
-  uint32_t node_id = get_node_from_path(&file_system, path, true);
+  uint32_t node_id = get_node_from_path(&file_system, path, false);
   if (node_id == NULL_NODE_ID) {
     log_msg(LOG_ERROR, "pfs_getattr: Path not found: %s", path);
     return -ENOENT;
@@ -86,11 +88,12 @@ int pfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
   log_msg(LOG_DEBUG, "pfs_readdir: Directory %s (node_id: %u) has %u entries.",
           path, node_id, file_system.table[node_id].data.dir_entry.entry_count);
 
-  for (uint32_t i = 0;
-       i < file_system.table[node_id].data.dir_entry.entry_count; ++i) {
+  for (uint32_t i = 0; i < file_system.table[node_id].data.dir_entry.entry_count;
+       ++i) {
     uint32_t entry_id = file_system.table[node_id].data.dir_entry.entries[i];
-    if (entry_id != NULL_NODE_ID)
+    if (entry_id == NULL_NODE_ID) {
       continue;
+    }
 
     fs_node *entry_node = &file_system.table[entry_id];
     const char *entry_name = NULL;
@@ -102,7 +105,6 @@ int pfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     } else if (entry_node->status == NODE_SYMLINK) {
       entry_name = entry_node->data.symlink.link_name;
     }
-
     if (entry_name) {
       filler(buf, entry_name, &entry_node->st, 0);
       log_msg(LOG_DEBUG, "pfs_readdir: Added entry '%s' to buffer.",
@@ -142,8 +144,9 @@ int pfs_read(const char *path, char *buf, size_t size, off_t offset,
 
   uint64_t bytes_to_read = size;
   if ((uint64_t)offset < file_size) {
-    if ((uint64_t)offset + bytes_to_read > file_size)
+    if ((uint64_t)offset + bytes_to_read > file_size) {
       bytes_to_read = file_size - offset;
+    }
     memcpy(buf, file_content + offset, bytes_to_read);
   } else {
     bytes_to_read = 0;
@@ -160,7 +163,6 @@ int pfs_write(const char *path, const char *buf, size_t size, off_t offset,
   (void)fi;
   log_msg(LOG_DEBUG, "pfs_write: path='%s', size=%zu, offset=%lld", path, size,
           offset);
-
   uint32_t node_id = get_node_from_path(&file_system, path, true);
   if (node_id == NULL_NODE_ID) {
     log_msg(LOG_ERROR, "pfs_write: File not found: %s", path);
@@ -192,7 +194,7 @@ int pfs_write(const char *path, const char *buf, size_t size, off_t offset,
   }
 
   memcpy(new_content + offset, buf, size);
-  if (write_from_path(&file_system, path, new_content, new_size)) {
+  if (write_from_path(&file_system, path, new_content, new_size) != 0) {
     log_msg(LOG_ERROR, "pfs_write: Failed to write to file: %s", path);
     free(new_content);
     return -EIO;
@@ -232,7 +234,7 @@ int pfs_mknod(const char *path, mode_t mode, dev_t rdev) {
     return -ENOENT;
   }
 
-  if (create_file(&file_system, new_file_name, parent_id, NULL, 0)) {
+  if (create_file(&file_system, new_file_name, parent_id, NULL, 0) != 0) {
     log_msg(LOG_ERROR, "pfs_mknod: Failed to create file: %s", new_file_name);
     return -EIO;
   }
@@ -243,7 +245,7 @@ int pfs_mknod(const char *path, mode_t mode, dev_t rdev) {
 
 int pfs_unlink(const char *path) {
   log_msg(LOG_DEBUG, "pfs_unlink: path='%s'", path);
-  if (delete_from_path(&file_system, path)) {
+  if (delete_from_path(&file_system, path) != 0) {
     log_msg(LOG_ERROR, "pfs_unlink: Failed to delete file: %s", path);
     return -EIO;
   }
@@ -324,7 +326,7 @@ int pfs_rmdir(const char *path) {
     log_msg(LOG_ERROR, "pfs_rmdir: Directory not empty: %s", path);
     return -ENOTEMPTY;
   }
-  if (delete_from_path(&file_system, path)) {
+  if (delete_from_path(&file_system, path) != 0) {
     log_msg(LOG_ERROR, "pfs_rmdir: Failed to delete directory: %s", path);
     return -EIO;
   }
@@ -341,10 +343,10 @@ int pfs_readlink(const char *path, char *buf, size_t size) {
   return fs_readlink(&file_system, path, buf, size);
 }
 
+#ifndef TEST_BUILD
 int pfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
   (void)fi;
   log_msg(LOG_DEBUG, "pfs_create: path='%s', mode=%o", path, mode);
-
   char parent_path[256];
   char new_file_name[256];
   char *last_slash = strrchr(path, '/');
@@ -354,26 +356,16 @@ int pfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
     strncpy(parent_path, path, last_slash - path);
     parent_path[last_slash - path] = '\0';
   }
-
   strcpy(new_file_name, last_slash + 1);
   uint32_t parent_id = get_node_from_path(&file_system, parent_path, true);
-
   if (parent_id == NULL_NODE_ID) {
     return -ENOENT;
   }
   if (create_file(&file_system, new_file_name, parent_id, NULL, 0) != 0) {
     return -EIO;
   }
-
-  uint32_t node_id = get_node_from_path(&file_system, path, true);
-  if (node_id == NULL_NODE_ID) {
-    return -ENOENT;
-  }
-
-  fi->fh = node_id;
   return 0;
 }
-
 int pfs_open(const char *path, struct fuse_file_info *fi) {
   log_msg(LOG_DEBUG, "pfs_open: path='%s'", path);
   uint32_t node_id = get_node_from_path(&file_system, path, true);
@@ -384,7 +376,6 @@ int pfs_open(const char *path, struct fuse_file_info *fi) {
   fi->fh = node_id;
   return 0;
 }
-
 int pfs_fallocate(const char *path, int mode, off_t offset, off_t length,
                   struct fuse_file_info *fi) {
   (void)path;
@@ -453,10 +444,10 @@ static struct fuse_operations pfs_oper = {
 
 int main(int argc, char *argv[]) {
   struct fuse_args args = {0};
-  char *temp_mountpoint = NULL;
+  char *temp_mountpoint = NULL; 
   const char *disk_image_path = "disk.img";
   int res;
-
+  
   char **new_argv = malloc(sizeof(char *) * argc);
   int new_argc = 0;
   new_argv[new_argc++] = argv[0];
@@ -481,9 +472,7 @@ int main(int argc, char *argv[]) {
         return 1;
       }
     } else if (strcmp(argv[i], "--help") == 0) {
-      printf("Usage: %s [FUSE options] [--log-level <level>] [--disk-image "
-             "<path>]\n",
-             argv[0]);
+      printf("Usage: %s [FUSE options] [--log-level <level>] [--disk-image <path>]\n", argv[0]);
       printf("Log levels: INFO, WARN, ERROR, DEBUG\n");
       new_argv[new_argc++] = argv[i];
     } else {
@@ -501,7 +490,7 @@ int main(int argc, char *argv[]) {
     fuse_opt_free_args(&args);
     return 1;
   }
-  mount_point = temp_mountpoint;
+  mount_point = temp_mountpoint; 
 
   g_ch = fuse_mount(mount_point, &args);
   if (!g_ch) {
@@ -522,8 +511,7 @@ int main(int argc, char *argv[]) {
 
   if (fs_load(&file_system, disk_image_path) != 0) {
     log_msg(LOG_WARN,
-            "main: Failed to load %s. Initializing a new file system.",
-            disk_image_path);
+            "main: Failed to load %s. Initializing a new file system.", disk_image_path);
     fs_free(&file_system);
     if (fs_init(&file_system, 1000) != 0) {
       log_msg(LOG_ERROR, "main: Failed to initialize new file system.");
@@ -541,8 +529,7 @@ int main(int argc, char *argv[]) {
   signal(SIGABRT, unmount_handler);
   signal(SIGSEGV, unmount_handler);
 
-  log_msg(LOG_INFO, "main: FUSE file system initialized/loaded. Mounting at %s",
-          mount_point);
+  log_msg(LOG_INFO, "main: FUSE file system initialized/loaded. Mounting at %s", mount_point);
   res = fuse_loop(g_fuse);
 
   fuse_unmount(mount_point, g_ch);
@@ -554,3 +541,4 @@ int main(int argc, char *argv[]) {
   return res;
 }
 #endif
+

@@ -56,12 +56,23 @@ static int start_pfs_fuse(const char *mount_point) {
   }
 
   if (fuse_child_pid == 0) {
-    int fd = open("/dev/null", O_WRONLY);
-    dup2(fd, STDOUT_FILENO);
-    dup2(fd, STDERR_FILENO);
-    close(fd);
+    char *args[8]; 
+    int arg_idx = 0;
+    args[arg_idx++] = "./bin/pfs";
+    args[arg_idx++] = "-f";
+    args[arg_idx++] = "-s";
 
-    char *args[] = {"./bin/pfs", "-f", "-s", (char *)mount_point, NULL};
+    char *debug_env = getenv("PFS_DEBUG_TESTS");
+    if (debug_env && strcmp(debug_env, "1") == 0) {
+      log_msg(LOG_INFO, "PFS_DEBUG_TESTS is set, enabling debug output for pfs.");
+      args[arg_idx++] = "-d";
+      args[arg_idx++] = "--log-level";
+      args[arg_idx++] = "DEBUG";
+    }
+
+    args[arg_idx++] = (char *)mount_point;
+    args[arg_idx++] = NULL;
+
     execvp(args[0], args);
     perror("execvp failed");
     _exit(1);
@@ -347,8 +358,8 @@ static void test_fuse_file_operations(void) {
          (ssize_t)test_content_len);
   close(fd);
   log_msg(LOG_INFO, "Test 1 Passed: File created and content written.");
-  log_msg(LOG_INFO, "Test 2: Reading from %s", filepath);
 
+  log_msg(LOG_INFO, "Test 2: Reading from %s", filepath);
   char read_buf[256] = {0};
   fd = open(filepath, O_RDONLY);
   assert(fd != -1);
@@ -374,20 +385,21 @@ static void test_fuse_file_operations(void) {
   DIR *dp = opendir(mount_point_path);
   assert(dp != NULL);
   struct dirent *de;
-  int found_testfile = 0;
-  int found_testdir = 0;
+  int found_file = 0;
+  int found_dir = 0;
   while ((de = readdir(dp)) != NULL) {
     if (strcmp(de->d_name, "testfile.txt") == 0) {
-      found_testfile = 1;
-      if (strcmp(de->d_name, "testdir") == 0) {
-        found_testdir = 1;
-      }
+      found_file = 1;
     }
+    if (strcmp(de->d_name, "testdir") == 0) {
+      found_dir = 1;
+    }
+    
   }
 
   closedir(dp);
-  assert(found_testfile == 1);
-  assert(found_testdir == 1);
+  assert(found_file == 1);
+  assert(found_dir == 1);
   log_msg(LOG_INFO, "Test 5 Passed: Listed files and directories correctly.");
 
   char symlink_path[256];
