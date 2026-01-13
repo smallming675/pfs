@@ -202,21 +202,21 @@ int create_file_at_dir(fs *fs, uint32_t dir_node_id, const char *file_name,
 
 int insert_node_to_dir(fs *fs, uint32_t dir_node_id, uint32_t file_node_id) {
   log_msg(LOG_INFO,
-          "insert_file_to_dir: Inserting node %u into directory %u...",
+          "insert_node_to_dir: Inserting node %u into directory %u...",
           file_node_id, dir_node_id);
   if (!fs || dir_node_id == NULL_NODE_ID || file_node_id == NULL_NODE_ID) {
     errno = EINVAL;
     return -EINVAL;
   }
   if (fs->table[dir_node_id].status != NODE_DIR_ENTRY) {
-    log_msg(LOG_ERROR, "insert_file_to_dir: Node %u is not a directory.",
+    log_msg(LOG_ERROR, "insert_node_to_dir: Node %u is not a directory.",
             dir_node_id);
     errno = ENOTDIR;
     return -ENOTDIR;
   }
 
   if (fs->table[dir_node_id].data.dir_entry.entry_count >= DIR_ENTRIES_COUNT) {
-    log_msg(LOG_ERROR, "insert_file_to_dir: Directory %u is full.",
+    log_msg(LOG_ERROR, "insert_node_to_dir: Directory %u is full.",
             dir_node_id);
     errno = ENOSPC;
     return -ENOSPC;
@@ -227,9 +227,9 @@ int insert_node_to_dir(fs *fs, uint32_t dir_node_id, uint32_t file_node_id) {
   fs->table[dir_node_id].data.dir_entry.entry_count++;
   fs->table[dir_node_id].st.st_mtime = time(NULL);
   fs->table[dir_node_id].st.st_ctime = time(NULL);
-  log_msg(LOG_INFO, "insert_file_to_dir: Inserted node %u into directory %u.",
+  log_msg(LOG_INFO, "insert_node_to_dir: Inserted node %u into directory %u.",
           file_node_id, dir_node_id);
-  log_msg(LOG_DEBUG, "insert_file_to_dir: Directory %u now has %u entries.",
+  log_msg(LOG_DEBUG, "insert_node_to_dir: Directory %u now has %u entries.",
           dir_node_id, fs->table[dir_node_id].data.dir_entry.entry_count);
   return 0;
 }
@@ -344,7 +344,7 @@ int create_dir(fs *fs, uint32_t parent_id, const char *name) {
   return 0;
 }
 
-int delete_directory(fs *fs, const char *name, uint32_t parent_dir_node_id) {
+int delete_dir(fs *fs, const char *name, uint32_t parent_dir_node_id) {
   log_msg(LOG_INFO, "delete_directory: Deleting directory '%s' from parent %u.",
           name, parent_dir_node_id);
   if (!fs || !name) {
@@ -400,7 +400,7 @@ int delete_directory(fs *fs, const char *name, uint32_t parent_dir_node_id) {
 
   log_msg(LOG_INFO, "delete_directory: Successfully deleted directory '%s'.",
           name);
-  return 0; // Success
+  return 0; 
 }
 
 int write_from_path(fs *fs, const char *path, const uint8_t *data,
@@ -431,7 +431,7 @@ int write_from_path(fs *fs, const char *path, const uint8_t *data,
   return result;
 }
 
-uint8_t *read_from_path(fs *fs, const char *path, int meta_only,
+uint8_t *read_from_path(const fs *fs, const char *path, bool meta_only,
                         uint64_t *out_size) {
   log_msg(LOG_INFO, "read_from_path: Reading from path '%s'.", path);
   if (!fs || !path) {
@@ -485,7 +485,7 @@ int delete_from_path(fs *fs, const char *path) {
 
   int result;
   if (fs->table[target_node_id].status == NODE_DIR_ENTRY) {
-    result = delete_directory(fs, rp.filename, rp.dir_id);
+    result = delete_dir(fs, rp.filename, rp.dir_id);
   } else {
     result = delete_file(fs, rp.filename, rp.dir_id);
   }
@@ -509,7 +509,7 @@ void free_resolved_path(resolved_path *rp) {
   }
 }
 
-resolved_path resolve_path(fs *fs, const char *path, uint32_t start_dir) {
+resolved_path resolve_path(const fs *fs, const char *path, uint32_t start_dir) {
   log_msg(LOG_INFO, "resolve_path: Resolving path '%s' from start dir %u.",
           path, start_dir);
   resolved_path rp = {NULL_NODE_ID, NULL};

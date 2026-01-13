@@ -95,7 +95,7 @@ int fs_write_os_file(const char *filename, const uint8_t *data, size_t bytes) {
 }
 
 static void cleanup_chain(fs *fs, uint32_t start_id) {
-  log_msg(LOG_DEBUG, "cleanup_chain: Cleaning up node chain starting at %i...",
+  log_msg(LOG_DEBUG, "cleanup_chain: Cleaning up node chain starting at %u...",
           start_id);
   if (!start_id)
     return;
@@ -105,7 +105,7 @@ static void cleanup_chain(fs *fs, uint32_t start_id) {
     if (fs->table[cur].status == NODE_FILE_END) {
       fs_deallocate_node(fs, cur);
       log_msg(LOG_DEBUG,
-              "cleanup_chain: Deallocated node chain starting at %i.",
+              "cleanup_chain: Deallocated node chain starting at %u.",
               start_id);
       break;
     }
@@ -115,10 +115,10 @@ static void cleanup_chain(fs *fs, uint32_t start_id) {
 }
 
 int fs_init(fs *fs, uint32_t nodes) {
-  log_msg(LOG_DEBUG, "fs_init: Initializing file system with %i nodes...",
-          nodes);
+  log_msg(LOG_DEBUG, "fs_init: Initializing file system with %u nodes (sizeof(fs_info)=%zu, sizeof(fs_node)=%zu)...",
+          nodes, sizeof(fs_info), sizeof(fs_node));
   if (!fs) {
-    log_msg(LOG_DEBUG, "fs_init: No file system provided");
+    log_msg(LOG_ERROR, "fs_init: No file system provided");
     errno = EINVAL;
     return -EINVAL;
   }
@@ -154,8 +154,8 @@ int fs_init(fs *fs, uint32_t nodes) {
 
 int fs_from_image(fs *fs, void *buffer, size_t bytes) {
   log_msg(LOG_INFO,
-          "fs_from_image: Recreating file system from a buffer of %zu bytes...",
-          bytes);
+          "fs_from_image: Recreating file system from a buffer of %zu bytes (sizeof(fs_info)=%zu, sizeof(fs_node)=%zu)...",
+          bytes, sizeof(fs_info), sizeof(fs_node));
 
   if (!fs || !buffer) {
     log_msg(LOG_ERROR, "fs_from_image: Invalid arguments to fs_from_image.");
@@ -391,6 +391,149 @@ int fs_readlink(fs *fs, const char *path, char *buf, size_t size) {
   return 0;
 }
 
+int fs_rename(fs *fs, const char *from, const char *to) {
+  log_msg(LOG_INFO, "fs_rename: Renaming '%s' to '%s'.", from, to);
+  if (!fs || !from || !to) {
+    return -EINVAL;
+  }
+
+  resolved_path from_rp = resolve_path(fs, from, ROOT);
+  if (from_rp.dir_id == NULL_NODE_ID || !from_rp.filename) {
+    free_resolved_path(&from_rp);
+    return -ENOENT;
+  }
+
+  uint32_t from_node_id = find_node(fs, from_rp.filename, from_rp.dir_id, false);
+  if (from_node_id == NULL_NODE_ID) {
+    free_resolved_path(&from_rp);
+    return -ENOENT;
+  }
+
+  resolved_path to_rp = resolve_path(fs, to, ROOT);
+  if (to_rp.dir_id == NULL_NODE_ID || !to_rp.filename) {
+    free_resolved_path(&from_rp);
+    free_resolved_path(&to_rp);
+    return -ENOENT;
+  }
+
+  if (has_name_conflict(fs, to_rp.dir_id, to_rp.filename)) {
+    free_resolved_path(&from_rp);
+    free_resolved_path(&to_rp);
+    return -EEXIST;
+  }
+
+  // Update the name in the node itself
+  fs_node *node = &fs->table[from_node_id];
+  if (node->status == NODE_DIR_ENTRY) {
+    strncpy(node->data.dir_entry.dir_name, to_rp.filename, FILE_NAME_SIZE - 1);
+    node->data.dir_entry.dir_name[FILE_NAME_SIZE - 1] = '\0';
+  } else if (node->status == NODE_SINGLE_NODE_FILE ||
+             node->status == NODE_FILE_START) {
+    strncpy(node->data.header_file.file_name, to_rp.filename,
+            FILE_NAME_SIZE - 1);
+    node->data.header_file.file_name[FILE_NAME_SIZE - 1] = '\0';
+  } else if (node->status == NODE_SYMLINK) {
+    strncpy(node->data.symlink.link_name, to_rp.filename, FILE_NAME_SIZE - 1);
+    node->data.symlink.link_name[FILE_NAME_SIZE - 1] = '\0';
+  }
+
+  // Move the node to the new directory
+  if (from_rp.dir_id != to_rp.dir_id) {
+    if (remove_file_from_dir(fs, from_rp.dir_id, from_node_id) != 0) {
+      // This should not happen
+      free_resolved_path(&from_rp);
+      free_resolved_path(&to_rp);
+      return -EIO;
+    }
+    if (insert_node_to_dir(fs, to_rp.dir_id, from_node_id) != 0) {
+      // Try to roll back
+      insert_node_to_dir(fs, from_rp.dir_id, from_node_id);
+      free_resolved_path(&from_rp);
+      free_resolved_path(&to_rp);
+      return -EIO;
+    }
+  }
+
+  free_resolved_path(&from_rp);
+  free_resolved_path(&to_rp);
+  return 0;
+}
+
+int fs_truncate(fs *fs, const char *path, off_t size) {
+  log_msg(LOG_INFO, "fs_truncate: Truncating '%s' to %zu bytes.", path, size);
+  if (!fs || !path) {
+    return -EINVAL;
+  }
+
+  uint32_t node_id = get_node_from_path(fs, path, true);
+  if (node_id == NULL_NODE_ID) {
+    return -ENOENT;
+  }
+
+  fs_node *node = &fs->table[node_id];
+  if (node->status != NODE_SINGLE_NODE_FILE && node->status != NODE_FILE_START) {
+    return -EISDIR;
+  }
+
+  uint64_t old_size = node->data.header_file.file_size;
+  if ((uint64_t)size == old_size) {
+    return 0; // No change
+  }
+
+  uint8_t *content = read_from_path(fs, path, false, &old_size);
+  uint8_t *new_content = realloc(content, size);
+  if (size > 0 && !new_content) {
+    free(content);
+    return -ENOMEM;
+  }
+
+  if ((uint64_t)size > old_size) {
+    memset(new_content + old_size, 0, size - old_size);
+  }
+
+  int res = write_from_path(fs, path, new_content, size);
+  free(new_content);
+  return res;
+}
+
+int fs_chmod(fs *fs, const char *path, mode_t mode) {
+    log_msg(LOG_INFO, "fs_chmod: Changing mode of '%s' to %o.", path, mode);
+    if (!fs || !path) {
+        return -EINVAL;
+    }
+
+    uint32_t node_id = get_node_from_path(fs, path, true);
+    if (node_id == NULL_NODE_ID) {
+        return -ENOENT;
+    }
+
+    fs->table[node_id].st.st_mode = mode;
+    fs->table[node_id].st.st_ctime = time(NULL);
+
+    return 0;
+}
+
+int fs_chown(fs *fs, const char *path, uid_t uid, gid_t gid) {
+    log_msg(LOG_INFO, "fs_chown: Changing owner of '%s' to uid=%u, gid=%u.", path, uid, gid);
+    if (!fs || !path) {
+        return -EINVAL;
+    }
+
+    uint32_t node_id = get_node_from_path(fs, path, true);
+    if (node_id == NULL_NODE_ID) {
+        return -ENOENT;
+    }
+
+    fs->table[node_id].st.st_uid = uid;
+    fs->table[node_id].st.st_gid = gid;
+    fs->table[node_id].st.st_ctime = time(NULL);
+
+    return 0;
+}
+
+
+
+
 int fs_to_image(const fs *fs, uint8_t **out_buf, size_t *out_bytes) {
   if (!fs || !out_buf || !out_bytes) {
     log_msg(LOG_ERROR, "fs_to_image: Invalid arguments to fs_to_image.");
@@ -413,8 +556,8 @@ int fs_to_image(const fs *fs, uint8_t **out_buf, size_t *out_bytes) {
   *out_buf = out;
   *out_bytes = total;
 
-  log_msg(LOG_INFO, "fs_to_image: Filesystem serialized to image (%zu bytes).",
-          total);
+  log_msg(LOG_INFO, "fs_to_image: Filesystem serialized to image (%zu bytes, sizeof(fs_info)=%zu, sizeof(fs_node)=%zu).",
+          total, sizeof(fs_info), sizeof(fs_node));
   return 0;
 }
 
@@ -450,7 +593,7 @@ uint32_t fs_allocate_node(fs *fs) {
     }
 
     fs->meta.smallest_id_deallocated_node = next;
-    log_msg(LOG_DEBUG, "fs_allocate_node: Allocated node %i.", next);
+    log_msg(LOG_DEBUG, "fs_allocate_node: Reallocated node %u.", id);
     return id;
   }
 
@@ -461,12 +604,11 @@ uint32_t fs_allocate_node(fs *fs) {
   uint32_t id = ++fs->meta.largest_id_allocated_node;
   fs->table[id].status = NODE_USED;
   fs->table[id].data.data_file.next_id = NULL_NODE_ID;
-  log_msg(LOG_DEBUG, "fs_allocate_node: Allocated node %i.", id);
+  log_msg(LOG_DEBUG, "fs_allocate_node: Allocated node %u.", id);
   return id;
 }
 
 void fs_deallocate_node(fs *fs, uint32_t id) {
-  log_msg(LOG_DEBUG, "fs_deallocate_node: Freeing node %i.", id);
   if (!fs)
     return;
   if (id >= fs->meta.total_node_count)
@@ -484,7 +626,7 @@ void fs_deallocate_node(fs *fs, uint32_t id) {
       fs->meta.largest_id_allocated_node > 0) {
     fs->meta.largest_id_allocated_node--;
   }
-  log_msg(LOG_DEBUG, "fs_deallocate_node: Freed node %i.", id);
+  log_msg(LOG_DEBUG, "fs_deallocate_node: Freed node %u.", id);
 }
 
 uint32_t find_node(const fs *fs, const char *name, uint32_t dir_node_id,
@@ -573,7 +715,7 @@ int create_file(fs *fs, const char *name, uint32_t dir_node_id,
 
   uint32_t head_id = fs_allocate_node(fs);
   if (insert_node_to_dir(fs, dir_node_id, head_id)) {
-    log_msg(LOG_ERROR, "create_file: Unable to insert '%s' into directory %i.",
+    log_msg(LOG_ERROR, "create_file: Unable to insert '%s' into directory %u.",
             name, dir_node_id);
     return 1;
   }
@@ -603,7 +745,7 @@ int create_file(fs *fs, const char *name, uint32_t dir_node_id,
       memcpy(head->data.header_file.data, data, (size_t)size);
     log_msg(
         LOG_INFO,
-        "create_file: New file '%s' created at directory id %i, node id %i.",
+        "create_file: New file '%s' created at directory id %u, node id %u.",
         name, dir_node_id, head_id);
     return 0;
   }
@@ -652,7 +794,7 @@ int create_file(fs *fs, const char *name, uint32_t dir_node_id,
 
   log_msg(
       LOG_INFO,
-      "create_file: New file '%s' created at %i, head: %zi, node count: %zi. ",
+      "create_file: New file '%s' created at %u, head: %u, node count: %zu. ",
       name, dir_node_id, head_id, node_count);
   return 0;
 }
@@ -674,7 +816,7 @@ int write_file(fs *fs, const char *name, uint32_t dir_node_id,
         fs->table[head_id].status == NODE_SINGLE_NODE_FILE)) {
     log_msg(LOG_ERROR,
             "write_file: Non-file node type found with name '%s' at directory "
-            "id %i.",
+            "id %u.",
             name, dir_node_id);
     return 0;
   }
@@ -697,7 +839,7 @@ int write_file(fs *fs, const char *name, uint32_t dir_node_id,
       memcpy(head->data.header_file.data, data, (size_t)size);
     cleanup_chain(fs, head->data.header_file.next_id);
     head->data.header_file.next_id = NULL_NODE_ID;
-    log_msg(LOG_INFO, "write_file: Written %llu bytes to node %i.",
+    log_msg(LOG_INFO, "write_file: Written %llu bytes to node %u.",
             (unsigned long long)size, head_id);
     return 0;
   }
@@ -762,14 +904,14 @@ int write_file(fs *fs, const char *name, uint32_t dir_node_id,
 
   log_msg(
       LOG_INFO,
-      "write_file: Written %llu bytes starting at node %i, node count: %zu.",
+      "write_file: Written %llu bytes starting at node %u, node count: %zu.",
       (unsigned long long)size, head_id, node_count);
   return 0;
 }
 
 uint8_t *read_file(const fs *fs, const char *name, uint32_t dir_node_id,
                    bool meta_only, uint64_t *out_size) {
-  log_msg(LOG_INFO, "read_file: Reading '%s' at directory id %i...", name,
+  log_msg(LOG_INFO, "read_file: Reading '%s' at directory id %u...", name,
           dir_node_id);
   if (out_size)
     *out_size = 0;
@@ -845,7 +987,7 @@ int delete_file(fs *fs, const char *name, uint32_t dir_node_id) {
     return 1;
   uint32_t head_id = find_node(fs, name, dir_node_id, true);
   if (head_id == NULL_NODE_ID) {
-    log_msg(LOG_ERROR, "delete_file: file '%s' not found at directory id '%i'.",
+    log_msg(LOG_ERROR, "delete_file: file '%s' not found at directory id %u.", name,
             dir_node_id);
     return 1;
   }

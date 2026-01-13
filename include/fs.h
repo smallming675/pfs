@@ -83,7 +83,10 @@ int fs_init(fs *fs, uint32_t nodes);
 int fs_load(fs *fs, const char *image_path);
 int fs_symlink(fs *fs, const char *target, const char *newpath);
 int fs_readlink(fs *fs, const char *path, char *buf, size_t size);
-int fs_from_image(fs *fs, void *buffer, size_t bytes);
+int fs_rename(fs *fs, const char *from, const char *to);
+int fs_truncate(fs *fs, const char *path, off_t new_size);
+int fs_chmod(fs *fs, const char *path, mode_t mode);
+int fs_chown(fs *fs, const char *path, uid_t uid, gid_t gid);
 int fs_to_image(const fs *fs, uint8_t **out_buf, size_t *out_bytes);
 void fs_free(fs *fs);
 
@@ -94,10 +97,10 @@ void fs_deallocate_node(fs *fs, uint32_t id);
 uint32_t find_node(const fs *fs, const char *name, uint32_t dir_node_id, bool follow_symlinks);
 int create_file(fs *fs, const char *name, uint32_t dir_node_id,
                 const uint8_t *data, uint64_t size);
-int write_file(fs *fs, const char *name, uint32_t dir_node_id,
-               const uint8_t *data, uint64_t size);
 uint8_t *read_file(const fs *fs, const char *name, uint32_t dir_node_id,
                    bool meta_only, uint64_t *out_size);
+int write_file(fs *fs, const char *name, uint32_t dir_node_id,
+               const uint8_t *data, uint64_t size);
 int delete_file(fs *fs, const char *name, uint32_t dir_node_id);
 
 int fs_write_image(const fs *fs, const char *filename);

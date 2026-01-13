@@ -1,4 +1,13 @@
 #define FUSE_USE_VERSION 26
+
+#define FUSE_SET_ATTR_MODE  (1 << 0)
+#define FUSE_SET_ATTR_UID   (1 << 1)
+#define FUSE_SET_ATTR_GID   (1 << 2)
+#define FUSE_SET_ATTR_SIZE  (1 << 3)
+#define FUSE_SET_ATTR_ATIME (1 << 4)
+#define FUSE_SET_ATTR_MTIME (1 << 5)
+
+
 #include "pfs.h"
 #include "dir.h"
 #include "fs.h"
@@ -6,16 +15,16 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <fuse.h>
-#include <fuse_opt.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
 #include <stdlib.h>
-
-fs file_system;
+#include <time.h>
 
 #ifndef TEST_BUILD
+fs file_system;
+
 char *mount_point = NULL;
 struct fuse_chan *g_ch = NULL;
 struct fuse *g_fuse = NULL;
@@ -34,8 +43,6 @@ static void unmount_handler(int sig) {
   signal(sig, SIG_DFL);
   raise(sig);
 }
-#endif
-
 
 int pfs_getattr(const char *path, struct stat *stbuf) {
   log_msg(LOG_DEBUG, "pfs_getattr: path='%s'", path);
@@ -135,27 +142,64 @@ int pfs_read(const char *path, char *buf, size_t size, off_t offset,
     return -EISDIR;
   }
 
-  uint64_t file_size;
-  uint8_t *file_content = read_from_path(&file_system, path, false, &file_size);
-  if (!file_content) {
-    log_msg(LOG_ERROR, "pfs_read: Error reading file: %s", path);
-    return -EIO;
+  fs_node *node = &file_system.table[node_id];
+  uint64_t file_size = node->data.header_file.file_size;
+
+  if ((uint64_t)offset >= file_size) {
+    return 0;
   }
 
   uint64_t bytes_to_read = size;
-  if ((uint64_t)offset < file_size) {
-    if ((uint64_t)offset + bytes_to_read > file_size) {
-      bytes_to_read = file_size - offset;
-    }
-    memcpy(buf, file_content + offset, bytes_to_read);
-  } else {
-    bytes_to_read = 0;
+  if ((uint64_t)offset + bytes_to_read > file_size) {
+    bytes_to_read = file_size - offset;
   }
-  free(file_content);
-  log_msg(LOG_INFO, "pfs_read: Successfully read %zu bytes from %s",
-          bytes_to_read, path);
 
-  return bytes_to_read;
+  uint64_t bytes_read = 0;
+  uint32_t current_node_id = node_id;
+  
+  if (offset > DATA_BYTES_PER_NODE) {
+      current_node_id = node->data.header_file.next_id;
+      offset -= DATA_BYTES_PER_NODE;
+  }
+
+  while (offset >= DATA_BYTES_PER_NODE && current_node_id != NULL_NODE_ID) {
+    current_node_id = file_system.table[current_node_id].data.data_file.next_id;
+    offset -= DATA_BYTES_PER_NODE;
+  }
+  
+  while (bytes_read < bytes_to_read && current_node_id != NULL_NODE_ID) {
+    fs_node *current_node = &file_system.table[current_node_id];
+    uint8_t *data_ptr;
+    uint64_t data_size;
+
+    if (current_node->status == NODE_FILE_START || current_node->status == NODE_SINGLE_NODE_FILE) {
+        data_ptr = current_node->data.header_file.data;
+        data_size = DATA_BYTES_PER_NODE;
+    } else {
+        data_ptr = current_node->data.data_file.data;
+        data_size = DATA_BYTES_PER_NODE;
+    }
+
+    uint64_t chunk_size = data_size - offset;
+    if (bytes_read + chunk_size > bytes_to_read) {
+      chunk_size = bytes_to_read - bytes_read;
+    }
+
+    memcpy(buf + bytes_read, data_ptr + offset, chunk_size);
+    bytes_read += chunk_size;
+    offset = 0; 
+    
+    if (current_node->status == NODE_FILE_START || current_node->status == NODE_SINGLE_NODE_FILE) {
+        current_node_id = current_node->data.header_file.next_id;
+    } else {
+        current_node_id = current_node->data.data_file.next_id;
+    }
+  }
+
+  log_msg(LOG_INFO, "pfs_read: Successfully read %zu bytes from %s",
+          bytes_read, path);
+
+  return bytes_read;
 }
 
 int pfs_write(const char *path, const char *buf, size_t size, off_t offset,
@@ -253,15 +297,7 @@ int pfs_unlink(const char *path) {
   return 0;
 }
 
-int pfs_utimens(const char *path, const struct timespec tv[2]) {
-  uint32_t node_id = get_node_from_path(&file_system, path, true);
-  if (node_id == NULL_NODE_ID) {
-    return -ENOENT;
-  }
-  file_system.table[node_id].st.st_atime = tv[0].tv_sec;
-  file_system.table[node_id].st.st_mtime = tv[1].tv_sec;
-  return 0;
-}
+
 
 int pfs_mkdir(const char *path, mode_t mode) {
   log_msg(LOG_DEBUG, "pfs_mkdir: path='%s', mode=%o", path, mode);
@@ -335,15 +371,126 @@ int pfs_rmdir(const char *path) {
 }
 
 int pfs_symlink(const char *target, const char *newpath) {
-  log_msg(LOG_DEBUG, "pfs_symlink: target='%s', newpath='%s'", target, newpath);
+  log_msg(LOG_DEBUG, "pfs_symlink: target='%s', newpath='%s'", target,
+          newpath);
   return fs_symlink(&file_system, target, newpath);
+}
+
+
+
+int pfs_setattr(const char *path, struct stat *stbuf, int to_set, struct fuse_file_info *fi) {
+    (void)fi; // fi is typically only needed for ftruncate/fchmod/fchown
+    log_msg(LOG_DEBUG, "pfs_setattr: path='%s', to_set=%d", path, to_set);
+
+    uint32_t node_id = get_node_from_path(&file_system, path, true);
+    if (node_id == NULL_NODE_ID) {
+        return -ENOENT;
+    }
+
+    // Update ctime regardless of which attributes are being set
+    file_system.table[node_id].st.st_ctime = time(NULL);
+
+    if (to_set & FUSE_SET_ATTR_MODE) {
+        file_system.table[node_id].st.st_mode = stbuf->st_mode;
+        log_msg(LOG_DEBUG, "pfs_setattr: Mode changed to %o for %s", stbuf->st_mode, path);
+    }
+    if (to_set & FUSE_SET_ATTR_UID) {
+        file_system.table[node_id].st.st_uid = stbuf->st_uid;
+        log_msg(LOG_DEBUG, "pfs_setattr: UID changed to %u for %s", stbuf->st_uid, path);
+    }
+    if (to_set & FUSE_SET_ATTR_GID) {
+        file_system.table[node_id].st.st_gid = stbuf->st_gid;
+        log_msg(LOG_DEBUG, "pfs_setattr: GID changed to %u for %s", stbuf->st_gid, path);
+    }
+    if (to_set & FUSE_SET_ATTR_SIZE) {
+        // This handles truncate
+        int res = fs_truncate(&file_system, path, stbuf->st_size);
+        if (res != 0) {
+        return res;
+        }
+        log_msg(LOG_DEBUG, "pfs_setattr: Size changed to %zu for %s", stbuf->st_size, path);
+    }
+    if (to_set & FUSE_SET_ATTR_ATIME) {
+        file_system.table[node_id].st.st_atime = stbuf->st_atime;
+        log_msg(LOG_DEBUG, "pfs_setattr: Atime changed for %s", path);
+    }
+    if (to_set & FUSE_SET_ATTR_MTIME) {
+        file_system.table[node_id].st.st_mtime = stbuf->st_mtime;
+        log_msg(LOG_DEBUG, "pfs_setattr: Mtime changed for %s", path);
+    }
+
+    return 0;
+}
+
+
+
+int pfs_rename(const char *from, const char *to) {
+  return fs_rename(&file_system, from, to);
 }
 
 int pfs_readlink(const char *path, char *buf, size_t size) {
   return fs_readlink(&file_system, path, buf, size);
 }
 
-#ifndef TEST_BUILD
+int pfs_chmod(const char *path, mode_t mode) {
+  log_msg(LOG_DEBUG, "pfs_chmod: path='%s', mode=%o", path, mode);
+  struct stat stbuf = {0};
+  stbuf.st_mode = mode;
+  return pfs_setattr(path, &stbuf, FUSE_SET_ATTR_MODE, NULL);
+}
+
+int pfs_chown(const char *path, uid_t uid, gid_t gid) {
+  log_msg(LOG_DEBUG, "pfs_chown: path='%s', uid=%d, gid=%d", path, uid, gid);
+  int to_set = 0;
+  struct stat stbuf = {0};
+
+  if (uid != (uid_t)-1) {
+    to_set |= FUSE_SET_ATTR_UID;
+    stbuf.st_uid = uid;
+  }
+  if (gid != (gid_t)-1) {
+    to_set |= FUSE_SET_ATTR_GID;
+    stbuf.st_gid = gid;
+  }
+  return pfs_setattr(path, &stbuf, to_set, NULL);
+}
+
+int pfs_truncate(const char *path, off_t size) {
+  log_msg(LOG_DEBUG, "pfs_truncate: path='%s', size=%lld", path, size);
+  struct stat stbuf = {0};
+  stbuf.st_size = size;
+  return pfs_setattr(path, &stbuf, FUSE_SET_ATTR_SIZE, NULL);
+}
+
+int pfs_utimens(const char *path, const struct timespec tv[2]) {
+  log_msg(LOG_DEBUG, "pfs_utimens: path='%s', atime=%ld, mtime=%ld", path,
+          tv[0].tv_sec, tv[1].tv_sec);
+  struct stat stbuf = {0};
+  int to_set = 0;
+
+  if (tv[0].tv_sec != 0) { // Check for valid atime
+      to_set |= FUSE_SET_ATTR_ATIME;
+      stbuf.st_atime = tv[0].tv_sec;
+  }
+  if (tv[1].tv_sec != 0) { // Check for valid mtime
+      to_set |= FUSE_SET_ATTR_MTIME;
+      stbuf.st_mtime = tv[1].tv_sec;
+  }
+  
+  // If no times were set, just update ctime
+  if (to_set == 0) {
+      uint32_t node_id = get_node_from_path(&file_system, path, true);
+      if (node_id == NULL_NODE_ID) {
+        return -ENOENT;
+      }
+      file_system.table[node_id].st.st_ctime = time(NULL);
+      return 0;
+  }
+  return pfs_setattr(path, &stbuf, to_set, NULL);
+}
+
+
+
 int pfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
   (void)fi;
   log_msg(LOG_DEBUG, "pfs_create: path='%s', mode=%o", path, mode);
@@ -376,6 +523,7 @@ int pfs_open(const char *path, struct fuse_file_info *fi) {
   fi->fh = node_id;
   return 0;
 }
+
 int pfs_fallocate(const char *path, int mode, off_t offset, off_t length,
                   struct fuse_file_info *fi) {
   (void)path;
@@ -399,7 +547,7 @@ static void *pfs_init(struct fuse_conn_info *conn) {
 
 static void pfs_destroy(void *private_data) { (void)private_data; }
 
-static struct fuse_operations pfs_oper = {
+struct fuse_operations pfs_oper = {
     .getattr = pfs_getattr,
     .readlink = pfs_readlink,
     .mknod = pfs_mknod,
@@ -407,11 +555,11 @@ static struct fuse_operations pfs_oper = {
     .unlink = pfs_unlink,
     .rmdir = pfs_rmdir,
     .symlink = pfs_symlink,
-    .rename = NULL,
+    .rename = pfs_rename,
     .link = NULL,
-    .chmod = NULL,
-    .chown = NULL,
-    .truncate = NULL,
+    .chmod = pfs_chmod,
+    .chown = pfs_chown,
+    .truncate = pfs_truncate,
     .utimens = pfs_utimens,
     .open = pfs_open,
     .read = pfs_read,
@@ -444,10 +592,10 @@ static struct fuse_operations pfs_oper = {
 
 int main(int argc, char *argv[]) {
   struct fuse_args args = {0};
-  char *temp_mountpoint = NULL; 
+  char *temp_mountpoint = NULL;
   const char *disk_image_path = "disk.img";
   int res;
-  
+
   char **new_argv = malloc(sizeof(char *) * argc);
   int new_argc = 0;
   new_argv[new_argc++] = argv[0];
@@ -458,7 +606,7 @@ int main(int argc, char *argv[]) {
         set_log_level(log_level_from_str(argv[i + 1]));
         i++;
       } else {
-        fprintf(stderr, "Missing log level\n");
+        log_msg(LOG_ERROR, "Missing log level");
         free(new_argv);
         return 1;
       }
@@ -467,7 +615,7 @@ int main(int argc, char *argv[]) {
         disk_image_path = argv[i + 1];
         i++;
       } else {
-        fprintf(stderr, "Missing disk image path\n");
+        log_msg(LOG_ERROR, "Missing disk image path");
         free(new_argv);
         return 1;
       }
@@ -490,7 +638,7 @@ int main(int argc, char *argv[]) {
     fuse_opt_free_args(&args);
     return 1;
   }
-  mount_point = temp_mountpoint; 
+  mount_point = temp_mountpoint;
 
   g_ch = fuse_mount(mount_point, &args);
   if (!g_ch) {
@@ -540,5 +688,5 @@ int main(int argc, char *argv[]) {
 
   return res;
 }
-#endif
 
+#endif
